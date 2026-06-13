@@ -7,7 +7,10 @@ turn your reviewing interests into bids:
 2. `score_bids.py` — build your profile from those ratings + your papers, and fill every submission's
    bid (HotCRP uses roughly **−20…20**).
 
-Runs locally with `scikit-learn` + `pypdf`. No pretrained-model download, no network.
+Runs locally with `scikit-learn` + `pypdf` (no network); the optional `--method specter2` adds a
+one-time model download.
+
+**Status:** beta — `v0.1.0-beta`.
 
 ---
 
@@ -127,7 +130,8 @@ the conference's **submissions**, and your papers are projected into that same s
 Fitting the vocabulary on the submission pool means anything specific to *your* papers but absent from the
 conference — your name, affiliation, venue boilerplate — simply never enters. So your "profile" isn't a
 hand-written keyword list; it's *your actual papers as vectors*, in the conference's own vocabulary.
-`reviewer-expertise-profile.json` saves the top-weighted terms so you can see what it picked up.
+`reviewer-expertise-profile.json` saves the top-weighted terms so you can see what it picked up — this
+summary is always TF-IDF-based, even when matching with `--method specter2` (below).
 
 ### Scoring a submission
 
@@ -146,6 +150,12 @@ Parameters live in `config.yaml`.
 4. **Map to bids.** Threshold at the `--positive-frac` quantile and rescale each side to
    `[-bid_max, bid_max]`, so ~that fraction end up positive **and** your strongest matches still reach
    ±`bid_max`.
+
+**Method choice (step 1).** By default the similarity is **TF-IDF** cosine (above). Pass
+`--method specter2` to instead use **AllenAI SPECTER2** neural embeddings — a model trained for
+paper-to-paper similarity that matches on *meaning*, so it catches related work phrased differently
+(needs `torch`/`transformers`/`adapters` and a one-time model download; slower on CPU). Only step 1
+changes — the normalize/blend/map steps and the TF-IDF top-terms summary are identical either way.
 
 The only judgment input is `topic_interests.csv`; everything else is mechanical and in `config.yaml`.
 

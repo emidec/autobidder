@@ -216,11 +216,15 @@ SPECTER2_MODEL = "allenai/specter2_base"
 SPECTER2_ADAPTER = "allenai/specter2"
 
 
-def _tfidf_scores(paper_texts, sub_texts):
-    """Default: TF-IDF cosine similarity. Returns (best_per_submission, top_terms)."""
+def _tfidf_fit(paper_texts, sub_texts):
+    """Fit TF-IDF on the CONFERENCE submissions and project your papers into that space.
+
+    Returns (S, P, vectorizer). Fitting on the submission pool means terms specific to your
+    papers but absent from it (your name, affiliation, venue boilerplate) never enter the
+    vocabulary, and domain-generic words get low IDF weight.
+    """
     try:
         from sklearn.feature_extraction.text import TfidfVectorizer, ENGLISH_STOP_WORDS
-        from sklearn.metrics.pairwise import cosine_similarity
     except Exception:
         sys.exit("scikit-learn is required: pip install scikit-learn")
     import warnings
@@ -229,12 +233,15 @@ def _tfidf_scores(paper_texts, sub_texts):
     vec = TfidfVectorizer(preprocessor=_clean, stop_words=stop,
                           token_pattern=r"(?u)\b[a-z][a-z]+\b",   # alphabetic tokens, 2+ chars
                           ngram_range=(1, 2), min_df=2, max_df=0.3, sublinear_tf=True)
-    # Fit the vocabulary + IDF on the CONFERENCE submissions, then project your papers into
-    # that space. Terms specific to your papers but absent from the pool (your name,
-    # affiliation, venue boilerplate) never enter the vocabulary, and domain-generic words
-    # get low IDF weight -- so matching and the top-terms summary stay on-topic.
     S = vec.fit_transform(sub_texts)
     P = vec.transform(paper_texts)
+    return S, P, vec
+
+
+def _tfidf_scores(paper_texts, sub_texts):
+    """Default: TF-IDF cosine similarity. Returns (best_per_submission, top_terms)."""
+    from sklearn.metrics.pairwise import cosine_similarity
+    S, P, vec = _tfidf_fit(paper_texts, sub_texts)
     best = cosine_similarity(S, P).max(axis=1)   # similarity to the closest of your papers
     return best, corpus_top_terms(vec, P)
 
@@ -242,7 +249,8 @@ def _tfidf_scores(paper_texts, sub_texts):
 def _specter2_scores(paper_texts, sub_texts):
     """--method specter2: neural scientific-paper embeddings (AllenAI SPECTER2).
 
-    Returns (best_per_submission, []) -- dense embeddings have no interpretable top terms.
+    The embeddings drive the *matching*; the profile's top-terms summary is still derived from
+    TF-IDF (cheap, always available) so the saved JSON stays readable either way.
     """
     try:
         import torch
@@ -275,7 +283,8 @@ def _specter2_scores(paper_texts, sub_texts):
         return np.vstack(out)
 
     best = cosine_similarity(embed(sub_texts), embed(paper_texts)).max(axis=1)
-    return best, []
+    _, P, vec = _tfidf_fit(paper_texts, sub_texts)    # readable top-terms summary for the profile
+    return best, corpus_top_terms(vec, P)
 
 
 def semantic_scores(paper_texts, sub_texts, method="tfidf"):
