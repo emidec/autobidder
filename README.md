@@ -22,9 +22,9 @@ one-time model download.
    make_topic_interests.py
         │
         ▼
-   topic_interests.csv   ← you set each topic's interest [-2..2]        papers_pdf/  (your PDFs, ≥5)
-        │                                                                      │
-        └──────────────────────────────┬───────────────────────────────────────┘
+   topic_interests.csv   ← you set them [-2..2]     papers_pdf/  (your PDFs, ≥5)
+        │                                                    │
+        └──────────────────────────────┬─────────────────────┘
                                        ▼
    revprefs.csv  ─────────────────►  score_bids.py  ─────────►  filled `preference` column
                                         ▲
