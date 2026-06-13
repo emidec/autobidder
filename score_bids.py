@@ -26,6 +26,10 @@ By default the abstract-laden input is deleted and an abstract-free scored CSV i
 
 Dependencies: scikit-learn (pip install scikit-learn) and pypdf (pip install pypdf).
 PyYAML is optional (config.yaml has a built-in fallback parser).
+
+--method specter2 swaps TF-IDF for AllenAI SPECTER2 neural embeddings (semantic matching
+beyond shared wording). It needs extra packages and a one-time model download:
+    pip install torch transformers adapters
 """
 
 import argparse
@@ -208,9 +212,12 @@ def _clean(text):
     return text.replace("-\n", "").replace("\n", " ").lower()
 
 
-def semantic_scores(paper_texts, sub_texts):
-    """Per-submission max cosine TF-IDF similarity to the reviewer's papers, plus the
-    fitted vectorizer and reviewer matrix (for the top-terms summary)."""
+SPECTER2_MODEL = "allenai/specter2_base"
+SPECTER2_ADAPTER = "allenai/specter2"
+
+
+def _tfidf_scores(paper_texts, sub_texts):
+    """Default: TF-IDF cosine similarity. Returns (best_per_submission, top_terms)."""
     try:
         from sklearn.feature_extraction.text import TfidfVectorizer, ENGLISH_STOP_WORDS
         from sklearn.metrics.pairwise import cosine_similarity
@@ -228,9 +235,54 @@ def semantic_scores(paper_texts, sub_texts):
     # get low IDF weight -- so matching and the top-terms summary stay on-topic.
     S = vec.fit_transform(sub_texts)
     P = vec.transform(paper_texts)
-    sims = cosine_similarity(S, P)        # (n_submissions, n_papers)
-    best = sims.max(axis=1)               # similarity to the closest of your papers
-    return best, vec, P
+    best = cosine_similarity(S, P).max(axis=1)   # similarity to the closest of your papers
+    return best, corpus_top_terms(vec, P)
+
+
+def _specter2_scores(paper_texts, sub_texts):
+    """--method specter2: neural scientific-paper embeddings (AllenAI SPECTER2).
+
+    Returns (best_per_submission, []) -- dense embeddings have no interpretable top terms.
+    """
+    try:
+        import torch
+        from transformers import AutoTokenizer
+        try:
+            from adapters import AutoAdapterModel                 # adapters >= 0.x
+        except Exception:
+            from transformers.adapters import AutoAdapterModel    # older transformers
+    except Exception:
+        sys.exit("SPECTER2 needs extra packages:\n"
+                 "    pip install torch transformers adapters\n"
+                 "It downloads the model once on first run (needs network); afterwards it runs offline.")
+    import warnings
+    import numpy as np
+    from sklearn.metrics.pairwise import cosine_similarity
+    warnings.filterwarnings("ignore")
+    tok = AutoTokenizer.from_pretrained(SPECTER2_MODEL)
+    model = AutoAdapterModel.from_pretrained(SPECTER2_MODEL)
+    model.load_adapter(SPECTER2_ADAPTER, source="hf", load_as="proximity", set_active=True)
+    model.eval()
+
+    def embed(texts, batch=16):
+        out = []
+        for i in range(0, len(texts), batch):
+            enc = tok(texts[i:i + batch], padding=True, truncation=True,
+                      max_length=512, return_tensors="pt")
+            with torch.no_grad():
+                rep = model(**enc).last_hidden_state[:, 0, :]     # CLS-token embedding
+            out.append(rep.cpu().numpy())
+        return np.vstack(out)
+
+    best = cosine_similarity(embed(sub_texts), embed(paper_texts)).max(axis=1)
+    return best, []
+
+
+def semantic_scores(paper_texts, sub_texts, method="tfidf"):
+    """Per-submission similarity to your most-similar paper, by the chosen method."""
+    if method == "specter2":
+        return _specter2_scores(paper_texts, sub_texts)
+    return _tfidf_scores(paper_texts, sub_texts)
 
 
 def corpus_top_terms(vec, P, topn=40):
@@ -305,6 +357,10 @@ def main(argv=None):
     ap.add_argument("--pdfs", default=DEFAULT_PDF_DIR,
                     help="folder of your paper PDFs (default: %s; at least %d unique required)"
                          % (DEFAULT_PDF_DIR, MIN_UNIQUE_PDFS))
+    ap.add_argument("--method", choices=["tfidf", "specter2"], default="tfidf",
+                    help="similarity method: tfidf (default; light, offline) or specter2 (neural "
+                         "scientific-paper embeddings; needs torch+transformers+adapters and a one-time "
+                         "model download)")
     ap.add_argument("--profile-out", dest="profile_out", default=DEFAULT_PROFILE,
                     help="where to save the profile summary JSON (default: %s)" % DEFAULT_PROFILE)
     ap.add_argument("--positive-frac", dest="positive_frac", type=float, default=0.1, metavar="F",
@@ -345,7 +401,7 @@ def main(argv=None):
     # ---- semantic similarity: your papers vs each submission ----
     paper_texts = read_pdf_texts(pdfs)
     sub_texts = [((r.get("title") or "") + ". " + (r.get("abstract") or "")) for r in rows]
-    sem, vec, P = semantic_scores(paper_texts, sub_texts)
+    sem, top_terms = semantic_scores(paper_texts, sub_texts, args.method)
     mu = sum(sem) / len(sem)
     sd = (sum((s - mu) ** 2 for s in sem) / len(sem)) ** 0.5 or 1.0
     sem_signal = [clamp((s - mu) / sd * SEM_GAIN, _REF_MIN, _REF_MAX) for s in sem]
@@ -375,7 +431,8 @@ def main(argv=None):
     profile = collections.OrderedDict()
     profile["meta"] = {
         "built": datetime.date.today().isoformat(),
-        "matching": "TF-IDF cosine similarity to your papers, blended with topic interests",
+        "matching": ("%s similarity to your papers, blended with topic interests"
+                     % ("SPECTER2 neural-embedding" if args.method == "specter2" else "TF-IDF cosine")),
         "interest_weight": INTEREST_WEIGHT, "sem_gain": SEM_GAIN,
         "unique_pdfs": len(pdfs), "submissions_scored": len(rows),
         "note": "Generated by score_bids.py - do not hand-edit. Topic interests come from %s; "
@@ -383,7 +440,7 @@ def main(argv=None):
     }
     profile["topic_affinity"] = collections.OrderedDict(
         (t, {"affinity": aff[t], "interest": interests[t]}) for t in interests)
-    profile["corpus_top_terms"] = corpus_top_terms(vec, P)
+    profile["corpus_top_terms"] = top_terms
     with open(args.profile_out, "w", encoding="utf-8") as fh:
         json.dump(profile, fh, indent=2, ensure_ascii=False)
 

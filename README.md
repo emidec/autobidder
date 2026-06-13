@@ -106,6 +106,7 @@ scored output, with the `abstract` column stripped** (`paper, title, preference,
 - `scikit-learn` — for the TF-IDF similarity: `pip install scikit-learn`
 - `pypdf` — to read your PDFs: `pip install pypdf`
 - `PyYAML` — optional; `score_bids.py` reads `config.yaml` with a built-in fallback parser if it isn't installed.
+- `torch` + `transformers` + `adapters` — **only** if you use `--method specter2` (neural embeddings): `pip install torch transformers adapters`.
 
 ---
 
@@ -155,6 +156,7 @@ The only judgment input is `topic_interests.csv`; everything else is mechanical 
 - **Re-rate a topic** → edit its `interest` in `topic_interests.csv`, then re-run `score_bids.py`.
 - **Target how many papers you bid positively on** → `--positive-frac F` (0–1). **Defaults to `0.1`** (~10%); set e.g. `--positive-frac 0.3` for ~30%. It thresholds at the target quantile and rescales each side to the full range, so ~F end up positive **and** your strongest papers still reach ±`bid_max` (the run reports the achieved fraction, within ±10 points).
 - **Balance similarity vs. your interests** → `interest_weight` in `config.yaml` (0 = pure paper-similarity, 1 = pure topic interests; default 0.35). `sem_gain` sharpens how much similarity differences matter.
+- **Use neural embeddings instead of TF-IDF** → `--method specter2` (AllenAI SPECTER2). Catches related work phrased differently (semantic, not just shared wording), but needs `pip install torch transformers adapters` and a one-time model download. Default `tfidf` is light and offline; the rest of the pipeline (interest blend, `--positive-frac`) is identical either way.
 - **Change the output range** → set `bid_max` in `config.yaml` (default 20, max 100). The scorer runs on a fixed ±`ref_max` (20) reference span and *linearly rescales* the final bid to ±`bid_max`. (`bid_max` is an integer in `[1, bid_limit]`; `bid_limit` defaults to HotCRP's 100.)
 
 ## Reproducibility
