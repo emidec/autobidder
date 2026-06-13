@@ -1,0 +1,31 @@
+# config.yaml - scoring parameters for score_bids.py
+#
+# All values are plain scalars (ints/floats). PyYAML is used if installed;
+# otherwise score_bids.py parses this flat key/value file with a built-in
+# fallback (so no third-party dependency is required).
+
+# ---- OUTPUT RANGE -----------------------------------------------------------
+# Bids are written to the CSV in [-bid_max, bid_max]. Change ONLY this to
+# rescale every bid (the distribution shape is preserved).
+# Must be an integer in [1, bid_limit].
+bid_max: 20
+bid_limit: 100        # HotCRP hard limit on |preference| (validation ceiling)
+
+# ---- TUNING CONSTANTS -------------------------------------------------------
+# Calibrated on a fixed reference span of +/-ref_max; the final bid is linearly
+# rescaled from that span to [-bid_max, bid_max]. You do NOT need to touch these
+# (or the profile) when changing bid_max.
+ref_max: 20             # reference span the constants below are tuned on (leave as-is)
+base_scale: 0.75        # how strongly topic tags drive the score (max base ~ 20*0.75)
+kw_cap: 9               # max absolute keyword contribution per paper
+compress_knee: 15.0     # scores above this get compressed (de-saturate the top)
+compress_factor: 0.5    # compression strength above the knee (0..1)
+strong_neg_threshold: -7    # a single term this negative = "clearly out of scope"
+strong_neg_floor: -8        #   ...and caps the bid at this value
+strong_pos_title_floor: 8   # a strong-positive term in the TITLE forces bid >= this
+
+# ---- TITLE-ONLY FALLBACK ----------------------------------------------------
+# Used only when the CSV has no abstract and no topics.
+to_pos_cap: 12
+to_neg_cap: 12
+to_scale: 1.6

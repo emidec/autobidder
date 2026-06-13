@@ -1,0 +1,19 @@
+# CSV files — HotCRP exports (revprefs/users), generated bids, and your topic interests.
+# These hold conference-confidential data and per-round state; keep them local.
+*.csv
+*.csv.bak
+
+# To version-control your topic interests anyway, uncomment:
+# !topic_interests.csv
+
+# Your papers (PDFs) — confidential and large
+papers_pdf/
+
+# Reviewer expertise profile — confidential, generated per reviewer
+reviewer-expertise-profile.json
+
+# Backups and Python cruft
+*.bak
+__pycache__/
+*.pyc
+.DS_Store
