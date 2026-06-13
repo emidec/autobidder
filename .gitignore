@@ -7,7 +7,7 @@
 # !topic_interests.csv
 
 # Your papers (PDFs) — confidential and large
-papers_pdf/
+*.pdf
 
 # Reviewer expertise profile — confidential, generated per reviewer
 reviewer-expertise-profile.json
