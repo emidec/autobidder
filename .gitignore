@@ -12,6 +12,9 @@ papers_pdf/
 # Reviewer expertise profile — confidential, generated per reviewer
 reviewer-expertise-profile.json
 
+# SPECTER2 embedding cache (generated; regenerates from your papers/submissions)
+.specter2_cache.npz
+
 # Backups and Python cruft
 *.bak
 __pycache__/

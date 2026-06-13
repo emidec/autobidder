@@ -54,6 +54,7 @@ DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "confi
 DEFAULT_PDF_DIR = "papers_pdf"
 MIN_UNIQUE_PDFS = 5
 DEFAULT_PROFILE = "reviewer-expertise-profile.json"
+DEFAULT_EMB_CACHE = ".specter2_cache.npz"   # on-disk cache for SPECTER2 embeddings
 INTEREST_TO_AFFINITY = 10   # map a -2..2 interest onto the -20..20 reference scale
 
 csv.field_size_limit(10 ** 7)
@@ -246,11 +247,38 @@ def _tfidf_scores(paper_texts, sub_texts):
     return best, corpus_top_terms(vec, P)
 
 
-def _specter2_scores(paper_texts, sub_texts):
+def _load_emb_cache(path, model_id):
+    """Load {sha256(text): vector} from an .npz cache; ignore it if the model differs."""
+    import numpy as np
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        d = np.load(path, allow_pickle=True)
+        if "model" not in d.files or str(d["model"]) != model_id:
+            return {}
+        return {str(k): d["vecs"][i] for i, k in enumerate(d["keys"])}
+    except Exception:
+        return {}
+
+
+def _save_emb_cache(path, model_id, cache):
+    import numpy as np
+    if not path:
+        return
+    try:
+        ks = list(cache.keys())
+        vecs = np.vstack([cache[k] for k in ks]) if ks else np.zeros((0, 0), dtype="float32")
+        np.savez(path, model=model_id, keys=np.array(ks), vecs=vecs)
+    except Exception:
+        pass
+
+
+def _specter2_scores(paper_texts, sub_texts, cache_path=DEFAULT_EMB_CACHE):
     """--method specter2: neural scientific-paper embeddings (AllenAI SPECTER2).
 
-    The embeddings drive the *matching*; the profile's top-terms summary is still derived from
-    TF-IDF (cheap, always available) so the saved JSON stays readable either way.
+    Embeddings drive the matching and are cached on disk keyed by sha256(text), so unchanged
+    abstracts are embedded only once across runs (a fully-cached re-run never loads the model).
+    The profile's top-terms summary is still derived from TF-IDF so the saved JSON stays readable.
     """
     try:
         import torch
@@ -267,30 +295,43 @@ def _specter2_scores(paper_texts, sub_texts):
     import numpy as np
     from sklearn.metrics.pairwise import cosine_similarity
     warnings.filterwarnings("ignore")
-    tok = AutoTokenizer.from_pretrained(SPECTER2_MODEL)
-    model = AutoAdapterModel.from_pretrained(SPECTER2_MODEL)
-    model.load_adapter(SPECTER2_ADAPTER, source="hf", load_as="proximity", set_active=True)
-    model.eval()
+
+    cache = _load_emb_cache(cache_path, SPECTER2_MODEL)
+    n_cached = len(cache)
+    tok = model = None   # loaded lazily -- only if something actually needs embedding
 
     def embed(texts, batch=16):
-        out = []
-        for i in range(0, len(texts), batch):
-            enc = tok(texts[i:i + batch], padding=True, truncation=True,
+        nonlocal tok, model
+        keys = [hashlib.sha256(t.encode("utf-8")).hexdigest() for t in texts]
+        todo = [i for i, k in enumerate(keys) if k not in cache]
+        if todo and model is None:
+            tok = AutoTokenizer.from_pretrained(SPECTER2_MODEL)
+            model = AutoAdapterModel.from_pretrained(SPECTER2_MODEL)
+            model.load_adapter(SPECTER2_ADAPTER, source="hf", load_as="proximity", set_active=True)
+            model.eval()
+        for s in range(0, len(todo), batch):
+            idx = todo[s:s + batch]
+            enc = tok([texts[i] for i in idx], padding=True, truncation=True,
                       max_length=512, return_tensors="pt")
             with torch.no_grad():
-                rep = model(**enc).last_hidden_state[:, 0, :]     # CLS-token embedding
-            out.append(rep.cpu().numpy())
-        return np.vstack(out)
+                rep = model(**enc).last_hidden_state[:, 0, :].cpu().numpy()   # CLS-token embedding
+            for j, i in enumerate(idx):
+                cache[keys[i]] = rep[j]
+        return np.vstack([cache[k] for k in keys])
 
-    best = cosine_similarity(embed(sub_texts), embed(paper_texts)).max(axis=1)
+    sub_emb = embed(sub_texts)
+    pap_emb = embed(paper_texts)
+    if len(cache) != n_cached:                        # only rewrite the cache if it grew
+        _save_emb_cache(cache_path, SPECTER2_MODEL, cache)
+    best = cosine_similarity(sub_emb, pap_emb).max(axis=1)
     _, P, vec = _tfidf_fit(paper_texts, sub_texts)    # readable top-terms summary for the profile
     return best, corpus_top_terms(vec, P)
 
 
-def semantic_scores(paper_texts, sub_texts, method="tfidf"):
+def semantic_scores(paper_texts, sub_texts, method="tfidf", cache_path=DEFAULT_EMB_CACHE):
     """Per-submission similarity to your most-similar paper, by the chosen method."""
     if method == "specter2":
-        return _specter2_scores(paper_texts, sub_texts)
+        return _specter2_scores(paper_texts, sub_texts, cache_path=cache_path)
     return _tfidf_scores(paper_texts, sub_texts)
 
 
@@ -370,6 +411,9 @@ def main(argv=None):
                     help="similarity method: tfidf (default; light, offline) or specter2 (neural "
                          "scientific-paper embeddings; needs torch+transformers+adapters and a one-time "
                          "model download)")
+    ap.add_argument("--emb-cache", dest="emb_cache", default=DEFAULT_EMB_CACHE,
+                    help="cache file for --method specter2 embeddings, reused across runs "
+                         "(default: %s)" % DEFAULT_EMB_CACHE)
     ap.add_argument("--profile-out", dest="profile_out", default=DEFAULT_PROFILE,
                     help="where to save the profile summary JSON (default: %s)" % DEFAULT_PROFILE)
     ap.add_argument("--positive-frac", dest="positive_frac", type=float, default=0.1, metavar="F",
@@ -410,7 +454,7 @@ def main(argv=None):
     # ---- semantic similarity: your papers vs each submission ----
     paper_texts = read_pdf_texts(pdfs)
     sub_texts = [((r.get("title") or "") + ". " + (r.get("abstract") or "")) for r in rows]
-    sem, top_terms = semantic_scores(paper_texts, sub_texts, args.method)
+    sem, top_terms = semantic_scores(paper_texts, sub_texts, args.method, cache_path=args.emb_cache)
     mu = sum(sem) / len(sem)
     sd = (sum((s - mu) ** 2 for s in sem) / len(sem)) ** 0.5 or 1.0
     sem_signal = [clamp((s - mu) / sd * SEM_GAIN, _REF_MIN, _REF_MAX) for s in sem]
