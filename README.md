@@ -7,7 +7,7 @@ turn your reviewing interests into bids:
 2. `score_bids.py` — build your profile from those ratings + your papers, and fill every submission's
    bid (HotCRP uses roughly **−20…20**).
 
-Runs locally on the Python standard library (+ `pypdf`). No model, no network.
+Runs locally with `scikit-learn` + `pypdf`. No pretrained-model download, no network.
 
 ---
 
@@ -73,14 +73,13 @@ python3 score_bids.py revprefs.csv -o filled.csv --report report.txt
 python3 score_bids.py revprefs.csv --positive-frac 0.3           # bid positively on ~30% of papers instead
 ```
 
-This uses `topic_interests.csv` (override with `--topic-interests`), mines positive keywords from
-`papers_pdf/` (**at least 5 unique PDFs are required, or it stops**), writes
-`reviewer-expertise-profile.json`, then fills the `preference` column — targeting a positive bid on
-~10% of papers (`--positive-frac`, default 0.1). **By default it deletes the
-original input and keeps only the scored output, which has the `abstract` column stripped**
-(`paper, title, preference, topics`) — pass `--keep-original` to keep the input. It auto-detects columns
-(full-text scoring with `abstract`/`topics`, else noisier title-only) and prints a histogram report;
-`--report` saves it.
+This uses `topic_interests.csv` (override with `--topic-interests`) and your papers in `papers_pdf/`
+(**at least 5 unique PDFs, or it stops**). It scores each submission by **TF-IDF cosine similarity to
+your most-similar paper**, blends that with your topic interests, writes
+`reviewer-expertise-profile.json`, and fills the `preference` column — targeting a positive bid on ~10%
+of papers (`--positive-frac`, default 0.1). **By default it deletes the original input and keeps only the
+scored output, with the `abstract` column stripped** (`paper, title, preference, topics`) — pass
+`--keep-original` to keep the input. It prints a histogram report; `--report` saves it.
 
 ---
 
@@ -89,11 +88,11 @@ original input and keeps only the scored output, which has the `abstract` column
 | File | Role |
 |---|---|
 | `make_topic_interests.py` | Creates a blank `topic_interests.csv` (every topic at 0) from the preferences CSV. Stdlib. |
-| `score_bids.py` | Builds the profile from your interests + papers and fills the bids. Needs `pypdf` (`PyYAML` optional). |
-| `config.yaml` | Scoring parameters (`bid_max`, caps, curve, guardrails). Edit to taste. |
+| `score_bids.py` | Scores submissions by similarity to your papers (+ interests) and fills the bids. Needs `scikit-learn` + `pypdf` (`PyYAML` optional). |
+| `config.yaml` | Scoring parameters (`bid_max`, `interest_weight`, `sem_gain`). Edit to taste. |
 | `topic_interests.csv` | **you edit** — `topic,interest` on a **-2..2** scale. Made by `make_topic_interests.py`. |
-| `papers_pdf/` | your papers as PDFs (**≥5 unique**), used for keyword mining. |
-| `reviewer-expertise-profile.json` | *(generated — don't hand-edit)* the profile, saved for inspection. |
+| `papers_pdf/` | your papers as PDFs (**≥5 unique**) — matched semantically against each submission. |
+| `reviewer-expertise-profile.json` | *(generated — don't hand-edit)* your topic interests + top TF-IDF terms of your papers, for inspection. |
 | `revprefs.csv` | the round's submissions (HotCRP export: `paper, title, preference[, abstract, topics]`). Deleted once scored, unless `--keep-original`. |
 | `revprefs.scored.csv` | the scored output — **abstracts removed** — this is what you upload back to HotCRP. |
 
@@ -104,20 +103,48 @@ original input and keeps only the scored output, which has the `abstract` column
 ## Requirements
 
 - Python 3.7+
+- `scikit-learn` — for the TF-IDF similarity: `pip install scikit-learn`
 - `pypdf` — to read your PDFs: `pip install pypdf`
 - `PyYAML` — optional; `score_bids.py` reads `config.yaml` with a built-in fallback parser if it isn't installed.
 
 ---
 
-## How a bid is computed
+## How it works
 
-For each paper (parameters in `config.yaml`):
+### Building your profile
 
-1. **Topic base** — `0.6·max + 0.4·mean` of your topic interests for the paper's tags (each interest is mapped ×10 onto the scoring scale), then scaled.
-2. **Keyword adjustment** — sum of mined positive-keyword weights found in the title (counted twice) and abstract, capped.
-3. **Combine + compress** the top tail so the best-fit papers separate instead of all pinning at the ceiling.
-4. **Guardrails** — out-of-scope / strong in-scope nudges.
-5. **Rescale, round, clamp** to the output range — **[-20, 20]** by default (`bid_max` in `config.yaml`).
+Your PDFs in `papers_pdf/` are read (first ~3 pages each — title, abstract, and intro, where the
+topical vocabulary lives) and lightly cleaned (lower-cased, words split across line breaks rejoined).
+The vocabulary and weighting (**TF-IDF** — term frequency–inverse document frequency) are learned from
+the conference's **submissions**, and your papers are projected into that same space:
+
+- **unigrams + bigrams**, so phrases like *differential privacy* or *membership inference* count as units;
+- English stop-words plus PDF boilerplate (*et al*, *figure*, *arxiv*, …) are dropped;
+- a term must appear in **≥2 submissions** but **< 30%** of them — dropping both rare noise and generic
+  words — with term frequency scaled sub-linearly (a word used 10× isn't 10× as important).
+
+Fitting the vocabulary on the submission pool means anything specific to *your* papers but absent from the
+conference — your name, affiliation, venue boilerplate — simply never enters. So your "profile" isn't a
+hand-written keyword list; it's *your actual papers as vectors*, in the conference's own vocabulary.
+`reviewer-expertise-profile.json` saves the top-weighted terms so you can see what it picked up.
+
+### Scoring a submission
+
+Parameters live in `config.yaml`.
+
+1. **Semantic similarity.** The submission's title+abstract is vectorized in the same space, and we take
+   the **cosine similarity to your single most-similar paper** (the *max* over your papers — so a
+   submission that strongly matches *any one* of your sub-areas scores high, even if it's unrelated to
+   the rest of your work).
+2. **Normalize.** Raw cosine similarities are small and bunched together (~0.05–0.2), so they're
+   **z-scored** across all submissions — "how far above/below your typical match is this one" — and
+   scaled by `sem_gain` onto a ±`ref_max` range.
+3. **Blend with interests.** `(1 − interest_weight)·similarity + interest_weight·topic`, where `topic` is
+   `0.6·max + 0.4·mean` of your −2..2 interests (×10) for the submission's topic tags. Default
+   `interest_weight` 0.35 — similarity leads, your topic ratings steer.
+4. **Map to bids.** Threshold at the `--positive-frac` quantile and rescale each side to
+   `[-bid_max, bid_max]`, so ~that fraction end up positive **and** your strongest matches still reach
+   ±`bid_max`.
 
 The only judgment input is `topic_interests.csv`; everything else is mechanical and in `config.yaml`.
 
@@ -127,7 +154,7 @@ The only judgment input is `topic_interests.csv`; everything else is mechanical 
 
 - **Re-rate a topic** → edit its `interest` in `topic_interests.csv`, then re-run `score_bids.py`.
 - **Target how many papers you bid positively on** → `--positive-frac F` (0–1). **Defaults to `0.1`** (~10%); set e.g. `--positive-frac 0.3` for ~30%. It thresholds at the target quantile and rescales each side to the full range, so ~F end up positive **and** your strongest papers still reach ±`bid_max` (the run reports the achieved fraction, within ±10 points).
-- **Change the curve** (caps, compression, guardrails) → edit `config.yaml`.
+- **Balance similarity vs. your interests** → `interest_weight` in `config.yaml` (0 = pure paper-similarity, 1 = pure topic interests; default 0.35). `sem_gain` sharpens how much similarity differences matter.
 - **Change the output range** → set `bid_max` in `config.yaml` (default 20, max 100). The scorer runs on a fixed ±`ref_max` (20) reference span and *linearly rescales* the final bid to ±`bid_max`. (`bid_max` is an integer in `[1, bid_limit]`; `bid_limit` defaults to HotCRP's 100.)
 
 ## Reproducibility

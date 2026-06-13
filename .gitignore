@@ -17,3 +17,6 @@ reviewer-expertise-profile.json
 __pycache__/
 *.pyc
 .DS_Store
+
+# tooling cache
+.claude/
