@@ -1,4 +1,4 @@
-# hotcrp-bidding — reviewer bidding toolkit
+# autobidder — reviewer bidding toolkit
 
 A small, self-service toolkit for HotCRP-run reviewing rounds (any conference). **Two commands**
 turn your reviewing interests into bids:
