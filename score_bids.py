@@ -305,10 +305,14 @@ def _specter2_scores(paper_texts, sub_texts, cache_path=DEFAULT_EMB_CACHE):
         keys = [hashlib.sha256(t.encode("utf-8")).hexdigest() for t in texts]
         todo = [i for i, k in enumerate(keys) if k not in cache]
         if todo and model is None:
+            sys.stderr.write("Loading SPECTER2 (%s)...\n" % SPECTER2_MODEL)
+            sys.stderr.flush()
             tok = AutoTokenizer.from_pretrained(SPECTER2_MODEL)
             model = AutoAdapterModel.from_pretrained(SPECTER2_MODEL)
-            model.load_adapter(SPECTER2_ADAPTER, source="hf", load_as="proximity", set_active=True)
+            name = model.load_adapter(SPECTER2_ADAPTER, source="hf", load_as="proximity", set_active=True)
+            model.set_active_adapters(name or "proximity")   # ensure the adapter runs in forward()
             model.eval()
+        done = 0
         for s in range(0, len(todo), batch):
             idx = todo[s:s + batch]
             enc = tok([texts[i] for i in idx], padding=True, truncation=True,
@@ -317,6 +321,12 @@ def _specter2_scores(paper_texts, sub_texts, cache_path=DEFAULT_EMB_CACHE):
                 rep = model(**enc).last_hidden_state[:, 0, :].cpu().numpy()   # CLS-token embedding
             for j, i in enumerate(idx):
                 cache[keys[i]] = rep[j]
+            done += len(idx)
+            if len(todo) > 200:                          # live progress for the slow CPU encode
+                sys.stderr.write("\r  SPECTER2 embedding %d/%d" % (done, len(todo)))
+                sys.stderr.flush()
+        if len(todo) > 200:
+            sys.stderr.write("\n")
         return np.vstack([cache[k] for k in keys])
 
     sub_emb = embed(sub_texts)
