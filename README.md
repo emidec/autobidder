@@ -45,6 +45,10 @@ and use the page's **Download** action → *Review preferences*. The default col
 on, add those fields to the view first (the **Show** menu / column options on the search bar → enable
 *Abstract* and *Topics*), then download. Save it as `revprefs.csv`.
 
+> ⚠️ **Heads-up:** this `revprefs.csv` contains the submissions' **abstracts**, and `score_bids.py`
+> **deletes it by default** after scoring — the uploadable output it writes has the abstracts stripped.
+> Pass `--keep-original` if you want to retain the abstract-containing CSV.
+
 **Upload (your bids).** After scoring, upload the filled CSV back on the same **Review preferences**
 page via its **Upload** action (or **Assignments → Upload**). HotCRP matches each row by its `paper` id
 and reads the `preference` column; the other columns are ignored.
@@ -172,3 +176,7 @@ The only judgment input is `topic_interests.csv`; everything else is mechanical 
 ## Reproducibility
 
 Fully deterministic: same papers + same `topic_interests.csv` + same CSV → identical bids.
+
+## Acknowledgments
+
+Built with the assistance of [Claude](https://www.anthropic.com/claude) (Anthropic).
