@@ -23,3 +23,6 @@ __pycache__/
 
 # tooling cache
 .claude/
+
+# local run wrapper
+run.sh
