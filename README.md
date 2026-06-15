@@ -82,7 +82,7 @@ python3 score_bids.py revprefs.csv --positive-frac 0.3           # bid positivel
 
 This uses `topic_interests.csv` (override with `--topic-interests`) and your papers in `papers_pdf/`
 (**at least 5 unique PDFs, or it stops**). It scores each submission by **TF-IDF cosine similarity to
-your most-similar paper**, blends that with your topic interests, writes
+your most-similar papers** (the top few), blends that with your topic interests, writes
 `reviewer-expertise-profile.json`, and fills the `preference` column — targeting a positive bid on ~10%
 of papers (`--positive-frac`, default 0.1). **By default it deletes the original input and keeps only the
 scored output, with the `abstract` column stripped** (`paper, title, preference, topics`) — pass
@@ -142,12 +142,14 @@ summary is always TF-IDF-based, even when matching with `--method specter2` (bel
 Parameters live in `config.yaml`.
 
 1. **Semantic similarity.** The submission's title+abstract is vectorized in the same space, and we take
-   the **cosine similarity to your single most-similar paper** (the *max* over your papers — so a
-   submission that strongly matches *any one* of your sub-areas scores high, even if it's unrelated to
-   the rest of your work).
-2. **Normalize.** Raw cosine similarities are small and bunched together (~0.05–0.2), so they're
-   **z-scored** across all submissions — "how far above/below your typical match is this one" — and
-   scaled by `sem_gain` onto a ±`ref_max` range.
+   the **mean cosine similarity to your top-3 most-similar papers** — so a submission that strongly
+   matches *any one* of your sub-areas still scores high, but a single fluke neighbor (or one shared rare
+   bigram) can't spike it on its own.
+2. **Normalize.** Cosine similarities are small, bunched, and skewed (TF-IDF piles near zero; SPECTER2
+   sits high even for unrelated papers), so each submission is **rank/quantile-transformed** across the
+   pool onto a ±`ref_max` range — "where does this rank among your matches this year." `sem_gain` shapes
+   the curve (9 = linear; higher pushes mid-rank papers toward the extremes). Unlike a z-score, this
+   doesn't depend on the pool's spread, so the blend in step 3 behaves the same across venues.
 3. **Blend with interests.** `(1 − interest_weight)·similarity + interest_weight·topic`, where `topic` is
    `0.6·max + 0.4·mean` of your −2..2 interests (×10) for the submission's topic tags. Default
    `interest_weight` 0.35 — similarity leads, your topic ratings steer.
@@ -158,8 +160,11 @@ Parameters live in `config.yaml`.
 **Method choice (step 1).** By default the similarity is **TF-IDF** cosine (above). Pass
 `--method specter2` to instead use **AllenAI SPECTER2** neural embeddings — a model trained for
 paper-to-paper similarity that matches on *meaning*, so it catches related work phrased differently
-(needs `torch`/`transformers`/`adapters` and a one-time model download; slower on CPU). Only step 1
-changes — the normalize/blend/map steps and the TF-IDF top-terms summary are identical either way.
+(needs `torch`/`transformers`/`adapters` and a one-time model download; slower on CPU). For SPECTER2
+both sides are embedded as `title [SEP] abstract`, the form the model was trained on — your papers are
+parsed down to their own title+abstract (falling back to the raw page text only when none parses)
+rather than fed the three-page read. Only step 1 changes — the normalize/blend/map steps and the
+TF-IDF top-terms summary are identical either way.
 
 The only judgment input is `topic_interests.csv`; everything else is mechanical and in `config.yaml`.
 
@@ -169,7 +174,8 @@ The only judgment input is `topic_interests.csv`; everything else is mechanical 
 
 - **Re-rate a topic** → edit its `interest` in `topic_interests.csv`, then re-run `score_bids.py`.
 - **Target how many papers you bid positively on** → `--positive-frac F` (0–1). **Defaults to `0.1`** (~10%); set e.g. `--positive-frac 0.3` for ~30%. It thresholds at the target quantile and rescales each side to the full range, so ~F end up positive **and** your strongest papers still reach ±`bid_max` (the run reports the achieved fraction, within ±10 points).
-- **Balance similarity vs. your interests** → `interest_weight` in `config.yaml` (0 = pure paper-similarity, 1 = pure topic interests; default 0.35). `sem_gain` sharpens how much similarity differences matter.
+- **Balance similarity vs. your interests** → `interest_weight` in `config.yaml` (0 = pure paper-similarity, 1 = pure topic interests; default 0.35). `sem_gain` shapes the rank curve (9 = linear; higher = more
+separation between near-miss and on-target papers).
 - **Use neural embeddings instead of TF-IDF** → `--method specter2` (AllenAI SPECTER2). Catches related work phrased differently (semantic, not just shared wording), but needs `pip install torch transformers adapters` and a one-time model download. Default `tfidf` is light and offline; the rest of the pipeline (interest blend, `--positive-frac`) is identical either way. Embeddings are cached in `.specter2_cache.npz` (keyed by abstract text), so re-runs only embed new/changed papers — a fully-cached re-run doesn't even load the model (override the path with `--emb-cache`).
 - **Change the output range** → set `bid_max` in `config.yaml` (default 20, max 100). The scorer runs on a fixed ±`ref_max` (20) reference span and *linearly rescales* the final bid to ±`bid_max`. (`bid_max` is an integer in `[1, bid_limit]`; `bid_limit` defaults to HotCRP's 100.)
 

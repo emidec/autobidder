@@ -15,7 +15,9 @@ ref_max: 20             # internal reference span the score is computed on (leav
 # own papers. 0 = ignore interests (pure semantic), 1 = ignore papers (pure interests).
 interest_weight: 0.35
 
-# How sharply semantic similarity maps onto the score scale. Similarity is z-scored
-# across submissions, then multiplied by sem_gain and clamped to +/-ref_max.
-# Higher = more separation between near-miss and on-target papers.
+# How sharply semantic similarity maps onto the score scale. Similarity is rank/quantile-
+# transformed across submissions onto +/-ref_max (robust, and independent of the pool's
+# spread so the blend with topic interests is stable across venues); sem_gain then shapes
+# the curve: 9 is neutral/linear, higher pushes mid-rank papers toward the rails (more
+# separation between near-miss and on-target), lower flattens it.
 sem_gain: 9.0

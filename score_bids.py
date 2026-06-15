@@ -14,8 +14,10 @@ PIPELINE
     python3 score_bids.py revprefs.csv                 # 2. score + fill bids (uses topic_interests.csv)
 
 HOW A BID IS COMPUTED (parameters in config.yaml)
-    sem        = max cosine TF-IDF similarity of the submission to any of your papers,
-                 z-scored across all submissions and scaled by sem_gain -> [-ref_max, ref_max]
+    sem        = mean of the top-3 cosine similarities of the submission to your papers
+                 (TF-IDF, or SPECTER2 embeddings with --method specter2), then
+                 rank/quantile-transformed across submissions and shaped by sem_gain
+                 -> [-ref_max, ref_max]
     topic_base = 0.6*max + 0.4*mean of your interests (x10) for the submission's topic tags
     value      = (1 - interest_weight)*sem + interest_weight*topic_base       (in [-ref_max, ref_max])
     bid        = value mapped to [-bid_max, bid_max] so ~--positive-frac of papers are positive
@@ -120,6 +122,30 @@ def rnd(x):
     return int(math.floor(x + 0.5)) if x >= 0 else -int(math.floor(-x + 0.5))
 
 
+def _signpow(x, e):
+    """Signed power: keep x's sign, raise its magnitude to e."""
+    return math.copysign(abs(x) ** e, x)
+
+
+def _quantile_ranks(values):
+    """Average-rank quantiles in (0, 1); tied values share the mean rank (so the many
+    exactly-equal TF-IDF similarities -- e.g. the pile at zero -- aren't spread across
+    the scale by tie order)."""
+    n = len(values)
+    order = sorted(range(n), key=lambda i: values[i])
+    q = [0.0] * n
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        qv = ((i + j) / 2.0 + 0.5) / n          # mean rank of the tie block -> quantile
+        for t in range(i, j + 1):
+            q[order[t]] = qv
+        i = j + 1
+    return q
+
+
 # ------------------------------- PDF folder ----------------------------------
 def find_unique_pdfs(folder):
     if not os.path.isdir(folder):
@@ -213,8 +239,48 @@ def _clean(text):
     return text.replace("-\n", "").replace("\n", " ").lower()
 
 
+_ABSTRACT_RE = re.compile(r"\babstract\b", re.I)
+_ABSTRACT_END_RE = re.compile(
+    r"\b(\d+\s*[.\)]?\s*introduction\b|introduction\b|keywords\b|index terms\b|"
+    r"categories and subject\b|ccs concepts\b|general terms\b)", re.I)
+
+
+def _split_title_abstract(raw):
+    """Best-effort (title, abstract) from a paper's leading PDF text.
+
+    Returns (title, abstract), or (None, None) if no plausible abstract parses so the
+    caller can fall back to the raw page text. Used to feed SPECTER2 the in-distribution
+    'title + abstract' it was trained on instead of a truncated three-page dump.
+    """
+    txt = raw.replace("-\n", "")
+    m = _ABSTRACT_RE.search(txt)
+    if not m:
+        return None, None
+    head = [ln.strip() for ln in txt[:m.start()].splitlines() if ln.strip()]
+    head = [ln for ln in head if not re.match(r"(?i)^arxiv[:\s]", ln)]
+    title = head[0] if head else ""
+    rest = txt[m.end():]
+    em = _ABSTRACT_END_RE.search(rest)
+    abstract = " ".join((rest[:em.start()] if em else rest[:2500]).split())
+    if len(abstract) < 40:                       # too short to be a real abstract
+        return None, None
+    return title, abstract
+
+
 SPECTER2_MODEL = "allenai/specter2_base"
 SPECTER2_ADAPTER = "allenai/specter2"
+SPECTER2_SEP = "[SEP]"   # BERT-based SPECTER2's sep_token; the model is trained on title+SEP+abstract
+
+
+def _topk_mean(sim, k=3):
+    """Per-submission similarity as the mean of its top-k paper cosines, not the single
+    max: a submission must match a sub-area of your work rather than one fluke neighbor
+    or one shared rare bigram. Falls back to fewer columns when you have <k papers."""
+    import numpy as np
+    k = min(k, sim.shape[1])
+    if k <= 1:
+        return sim.max(axis=1)
+    return np.partition(sim, -k, axis=1)[:, -k:].mean(axis=1)
 
 
 def _tfidf_fit(paper_texts, sub_texts):
@@ -239,11 +305,12 @@ def _tfidf_fit(paper_texts, sub_texts):
     return S, P, vec
 
 
-def _tfidf_scores(paper_texts, sub_texts):
+def _tfidf_scores(paper_texts, sub_pairs):
     """Default: TF-IDF cosine similarity. Returns (best_per_submission, top_terms)."""
     from sklearn.metrics.pairwise import cosine_similarity
+    sub_texts = [(t + ". " + a) for t, a in sub_pairs]
     S, P, vec = _tfidf_fit(paper_texts, sub_texts)
-    best = cosine_similarity(S, P).max(axis=1)   # similarity to the closest of your papers
+    best = _topk_mean(cosine_similarity(S, P), k=3)   # match a sub-area, not one fluke paper
     return best, corpus_top_terms(vec, P)
 
 
@@ -273,8 +340,12 @@ def _save_emb_cache(path, model_id, cache):
         pass
 
 
-def _specter2_scores(paper_texts, sub_texts, cache_path=DEFAULT_EMB_CACHE):
+def _specter2_scores(paper_texts, sub_pairs, cache_path=DEFAULT_EMB_CACHE):
     """--method specter2: neural scientific-paper embeddings (AllenAI SPECTER2).
+
+    Both sides are embedded as 'title [SEP] abstract', the in-distribution form SPECTER2 was
+    trained on -- your papers are parsed down to title+abstract (falling back to the raw page
+    text only when no abstract parses) instead of being fed a truncated three-page dump.
 
     Embeddings drive the matching and are cached on disk keyed by sha256(text), so unchanged
     abstracts are embedded only once across runs (a fully-cached re-run never loads the model).
@@ -295,6 +366,13 @@ def _specter2_scores(paper_texts, sub_texts, cache_path=DEFAULT_EMB_CACHE):
     import numpy as np
     from sklearn.metrics.pairwise import cosine_similarity
     warnings.filterwarnings("ignore")
+
+    # assemble 'title [SEP] abstract' for both sides; parse your papers, fall back to raw text
+    pap_texts = []
+    for raw in paper_texts:
+        pt, pa = _split_title_abstract(raw)
+        pap_texts.append((pt + SPECTER2_SEP + pa) if pa else " ".join(raw.split()))
+    sub_join = [(t + SPECTER2_SEP + a) for t, a in sub_pairs]
 
     cache = _load_emb_cache(cache_path, SPECTER2_MODEL)
     n_cached = len(cache)
@@ -329,20 +407,24 @@ def _specter2_scores(paper_texts, sub_texts, cache_path=DEFAULT_EMB_CACHE):
             sys.stderr.write("\n")
         return np.vstack([cache[k] for k in keys])
 
-    sub_emb = embed(sub_texts)
-    pap_emb = embed(paper_texts)
+    sub_emb = embed(sub_join)
+    pap_emb = embed(pap_texts)
     if len(cache) != n_cached:                        # only rewrite the cache if it grew
         _save_emb_cache(cache_path, SPECTER2_MODEL, cache)
-    best = cosine_similarity(sub_emb, pap_emb).max(axis=1)
-    _, P, vec = _tfidf_fit(paper_texts, sub_texts)    # readable top-terms summary for the profile
+    best = _topk_mean(cosine_similarity(sub_emb, pap_emb), k=3)
+    sub_tfidf = [(t + ". " + a) for t, a in sub_pairs]
+    _, P, vec = _tfidf_fit(paper_texts, sub_tfidf)    # readable top-terms summary for the profile
     return best, corpus_top_terms(vec, P)
 
 
-def semantic_scores(paper_texts, sub_texts, method="tfidf", cache_path=DEFAULT_EMB_CACHE):
-    """Per-submission similarity to your most-similar paper, by the chosen method."""
+def semantic_scores(paper_texts, sub_pairs, method="tfidf", cache_path=DEFAULT_EMB_CACHE):
+    """Per-submission similarity to your most-similar papers (top-k), by the chosen method.
+
+    paper_texts: raw leading PDF text per paper. sub_pairs: (title, abstract) per submission.
+    """
     if method == "specter2":
-        return _specter2_scores(paper_texts, sub_texts, cache_path=cache_path)
-    return _tfidf_scores(paper_texts, sub_texts)
+        return _specter2_scores(paper_texts, sub_pairs, cache_path=cache_path)
+    return _tfidf_scores(paper_texts, sub_pairs)
 
 
 def corpus_top_terms(vec, P, topn=40):
@@ -463,11 +545,15 @@ def main(argv=None):
 
     # ---- semantic similarity: your papers vs each submission ----
     paper_texts = read_pdf_texts(pdfs)
-    sub_texts = [((r.get("title") or "") + ". " + (r.get("abstract") or "")) for r in rows]
-    sem, top_terms = semantic_scores(paper_texts, sub_texts, args.method, cache_path=args.emb_cache)
-    mu = sum(sem) / len(sem)
-    sd = (sum((s - mu) ** 2 for s in sem) / len(sem)) ** 0.5 or 1.0
-    sem_signal = [clamp((s - mu) / sd * SEM_GAIN, _REF_MIN, _REF_MAX) for s in sem]
+    sub_pairs = [((r.get("title") or ""), (r.get("abstract") or "")) for r in rows]
+    sem, top_terms = semantic_scores(paper_texts, sub_pairs, args.method, cache_path=args.emb_cache)
+    # Rank/quantile-transform similarity onto the fixed reference scale: robust to TF-IDF's
+    # right-skew and SPECTER2's anisotropy, and -- unlike a z-score -- independent of this
+    # year's similarity spread, so the blend with topic_base stays stable across venues.
+    # sem_gain shapes the curve (9 = linear; higher pushes mid-rank papers toward the rails).
+    e = (9.0 / SEM_GAIN) if SEM_GAIN > 0 else 1.0
+    sem_signal = [clamp(_signpow(2 * q - 1, e) * _REF_MAX, _REF_MIN, _REF_MAX)
+                  for q in _quantile_ranks(list(sem))]
 
     # ---- topic-interest base per submission ----
     aff = {t: i * INTEREST_TO_AFFINITY for t, i in interests.items()}
