@@ -32,6 +32,10 @@ PyYAML is optional (config.yaml has a built-in fallback parser).
 --method specter2 swaps TF-IDF for AllenAI SPECTER2 neural embeddings (semantic matching
 beyond shared wording). It needs extra packages and a one-time model download:
     pip install torch transformers adapters
+
+--method rerank keeps the TF-IDF pass to shortlist the top-N candidates, then rescores only
+those with a local cross-encoder (retrieve-then-rerank). It also needs a one-time download:
+    pip install sentence-transformers
 """
 
 import argparse
@@ -271,6 +275,11 @@ SPECTER2_MODEL = "allenai/specter2_base"
 SPECTER2_ADAPTER = "allenai/specter2"
 SPECTER2_SEP = "[SEP]"   # BERT-based SPECTER2's sep_token; the model is trained on title+SEP+abstract
 
+DEFAULT_RERANK_MODEL = "BAAI/bge-reranker-v2-m3"   # multilingual cross-encoder; handles long abstracts
+RERANK_TOPN_FLOOR = 150          # minimum cross-encoder shortlist, even for small pools
+RERANK_TOPN_CUSHION = 3          # auto shortlist = this x the expected positive band (see _auto_rerank_topn)
+RERANK_MAX_LENGTH = 512          # over-long (paper, submission) pairs are truncated
+
 
 def _topk_mean(sim, k=3):
     """Per-submission similarity as the mean of its top-k paper cosines, not the single
@@ -417,13 +426,80 @@ def _specter2_scores(paper_texts, sub_pairs, cache_path=DEFAULT_EMB_CACHE):
     return best, corpus_top_terms(vec, P)
 
 
-def semantic_scores(paper_texts, sub_pairs, method="tfidf", cache_path=DEFAULT_EMB_CACHE):
+def _rerank_scores(paper_texts, sub_pairs, topn=RERANK_TOPN_FLOOR, model_id=DEFAULT_RERANK_MODEL):
+    """--method rerank: TF-IDF retrieval + a local cross-encoder reranker (retrieve-then-rerank).
+
+    The cheap TF-IDF pass ranks every submission; only the top-N candidates are then rescored by
+    a cross-encoder, which reads each (your paper, submission) pair JOINTLY -- more precise than
+    comparing independent vectors, but too slow to run on the whole pool. Each candidate is scored
+    against your papers (title+abstract, parsed like specter2, falling back to the raw page text)
+    and aggregated over them with a top-3 mean. Fully offline after the one-time model download,
+    and deterministic: an eval-mode forward pass with no sampling, so identical inputs give
+    identical scores.
+
+    Reconciling the two scales: TF-IDF cosines (~0..1, bunched low) and cross-encoder logits
+    (unbounded, different units) are not comparable, so we never compare them. Each group is
+    rank-transformed within itself, and the reranked candidates are placed as a band strictly
+    ABOVE the non-candidates, which keep their TF-IDF order. The downstream normalize step only
+    cares about ordering, so this is all that's needed to keep the two scores from fighting.
+    """
+    try:
+        from sentence_transformers import CrossEncoder
+    except Exception:
+        sys.exit("--method rerank needs sentence-transformers:\n"
+                 "    pip install sentence-transformers\n"
+                 "It downloads the reranker once on first run (needs network); afterwards it runs offline.")
+    import warnings
+    import numpy as np
+    from sklearn.metrics.pairwise import cosine_similarity
+    warnings.filterwarnings("ignore")
+
+    # ---- stage 1: TF-IDF retrieval over the whole pool (same scoring as --method tfidf) ----
+    sub_texts = [(t + ". " + a) for t, a in sub_pairs]
+    S, P, vec = _tfidf_fit(paper_texts, sub_texts)
+    tfidf_best = _topk_mean(cosine_similarity(S, P), k=3)
+    n = len(sub_pairs)
+    k = max(1, min(topn, n))
+    cand = sorted(range(n), key=lambda i: tfidf_best[i], reverse=True)[:k]   # top-N candidate indices
+    cand_set = set(cand)
+    sys.stderr.write("rerank: cross-encoding the top %d of %d submissions\n" % (k, n))
+    sys.stderr.flush()
+
+    # ---- stage 2: cross-encoder rerank of the candidates only ----
+    pap_texts = []
+    for raw in paper_texts:
+        pt, pa = _split_title_abstract(raw)
+        pap_texts.append((pt + ". " + pa) if pa else " ".join(raw.split()))
+    sys.stderr.write("Loading reranker (%s)...\n" % model_id)
+    sys.stderr.flush()
+    ce = CrossEncoder(model_id, max_length=RERANK_MAX_LENGTH)
+    ce.model.eval()                                                         # deterministic forward pass
+    pairs = [(pap_texts[p], sub_texts[i]) for i in cand for p in range(len(pap_texts))]
+    logits = ce.predict(pairs, batch_size=32, convert_to_numpy=True,
+                        show_progress_bar=(len(pairs) > 200))
+    ce_mat = np.asarray(logits, dtype="float64").reshape(len(cand), len(pap_texts))
+    ce_best = _topk_mean(ce_mat, k=3)                                       # aggregate over your papers
+
+    # ---- reconcile: reranked band [1, 2) sits above the non-candidate band [0, 1) ----
+    scores = np.empty(n, dtype="float64")
+    noncand = [i for i in range(n) if i not in cand_set]
+    for i, q in zip(noncand, _quantile_ranks([tfidf_best[i] for i in noncand])):
+        scores[i] = q
+    for j, q in zip(cand, _quantile_ranks(list(ce_best))):
+        scores[j] = 1.0 + q
+    return scores, corpus_top_terms(vec, P)
+
+
+def semantic_scores(paper_texts, sub_pairs, method="tfidf", cache_path=DEFAULT_EMB_CACHE,
+                    rerank_topn=RERANK_TOPN_FLOOR, rerank_model=DEFAULT_RERANK_MODEL):
     """Per-submission similarity to your most-similar papers (top-k), by the chosen method.
 
     paper_texts: raw leading PDF text per paper. sub_pairs: (title, abstract) per submission.
     """
     if method == "specter2":
         return _specter2_scores(paper_texts, sub_pairs, cache_path=cache_path)
+    if method == "rerank":
+        return _rerank_scores(paper_texts, sub_pairs, topn=rerank_topn, model_id=rerank_model)
     return _tfidf_scores(paper_texts, sub_pairs)
 
 
@@ -437,6 +513,18 @@ def corpus_top_terms(vec, P, topn=40):
 
 
 # ------------------------- target positive fraction --------------------------
+def _auto_rerank_topn(n_submissions, positive_frac):
+    """Default shortlist size for --method rerank.
+
+    Positive bids are the top ~positive_frac of the pool, and reranked candidates sort above
+    everything else -- so the shortlist must hold at least the whole positive band, or some
+    positive bids fall to papers the cross-encoder never scored. We take a CUSHION multiple of
+    that band (headroom to promote papers TF-IDF underranks) with a floor for small rounds, so
+    N scales with the pool and the target instead of being a constant.
+    """
+    return max(RERANK_TOPN_FLOOR, math.ceil(RERANK_TOPN_CUSHION * positive_frac * n_submissions))
+
+
 def bids_for_positive_fraction(values, target):
     """Map continuous reference scores to final bids so ~`target` of papers are positive,
     putting the threshold at the target quantile and rescaling EACH SIDE to the full output
@@ -499,13 +587,21 @@ def main(argv=None):
     ap.add_argument("--pdfs", default=DEFAULT_PDF_DIR,
                     help="folder of your paper PDFs (default: %s; at least %d unique required)"
                          % (DEFAULT_PDF_DIR, MIN_UNIQUE_PDFS))
-    ap.add_argument("--method", choices=["tfidf", "specter2"], default="tfidf",
-                    help="similarity method: tfidf (default; light, offline) or specter2 (neural "
-                         "scientific-paper embeddings; needs torch+transformers+adapters and a one-time "
-                         "model download)")
+    ap.add_argument("--method", choices=["tfidf", "specter2", "rerank"], default="tfidf",
+                    help="similarity method: tfidf (default; light, offline); specter2 (neural "
+                         "scientific-paper embeddings; needs torch+transformers+adapters); or rerank "
+                         "(TF-IDF retrieves the top-N candidates, a local cross-encoder reranks them; "
+                         "needs sentence-transformers). specter2 and rerank do a one-time model download.")
     ap.add_argument("--emb-cache", dest="emb_cache", default=DEFAULT_EMB_CACHE,
                     help="cache file for --method specter2 embeddings, reused across runs "
                          "(default: %s)" % DEFAULT_EMB_CACHE)
+    ap.add_argument("--rerank-topn", dest="rerank_topn", type=int, default=None, metavar="N",
+                    help="--method rerank: rescore the top-N TF-IDF candidates with the cross-encoder "
+                         "(default: auto = max(%d, %d x --positive-frac x #submissions), so the "
+                         "shortlist always covers the positive bid band)"
+                         % (RERANK_TOPN_FLOOR, RERANK_TOPN_CUSHION))
+    ap.add_argument("--rerank-model", dest="rerank_model", default=DEFAULT_RERANK_MODEL,
+                    help="--method rerank: cross-encoder model id (default: %s)" % DEFAULT_RERANK_MODEL)
     ap.add_argument("--profile-out", dest="profile_out", default=DEFAULT_PROFILE,
                     help="where to save the profile summary JSON (default: %s)" % DEFAULT_PROFILE)
     ap.add_argument("--positive-frac", dest="positive_frac", type=float, default=0.1, metavar="F",
@@ -524,6 +620,8 @@ def main(argv=None):
         ap.error("input not found: %s" % args.input)
     if not (0.0 <= args.positive_frac <= 1.0):
         ap.error("--positive-frac must be a float between 0 and 1")
+    if args.rerank_topn is not None and args.rerank_topn < 1:
+        ap.error("--rerank-topn must be a positive integer")
     load_config(args.config)
 
     # read submissions
@@ -546,7 +644,10 @@ def main(argv=None):
     # ---- semantic similarity: your papers vs each submission ----
     paper_texts = read_pdf_texts(pdfs)
     sub_pairs = [((r.get("title") or ""), (r.get("abstract") or "")) for r in rows]
-    sem, top_terms = semantic_scores(paper_texts, sub_pairs, args.method, cache_path=args.emb_cache)
+    rerank_topn = (args.rerank_topn if args.rerank_topn is not None
+                   else _auto_rerank_topn(len(rows), args.positive_frac))
+    sem, top_terms = semantic_scores(paper_texts, sub_pairs, args.method, cache_path=args.emb_cache,
+                                     rerank_topn=rerank_topn, rerank_model=args.rerank_model)
     # Rank/quantile-transform similarity onto the fixed reference scale: robust to TF-IDF's
     # right-skew and SPECTER2's anisotropy, and -- unlike a z-score -- independent of this
     # year's similarity spread, so the blend with topic_base stays stable across venues.

@@ -114,6 +114,7 @@ scored output, with the `abstract` column stripped** (`paper, title, preference,
 - `pypdf` — to read your PDFs: `pip install pypdf`
 - `PyYAML` — optional; `score_bids.py` reads `config.yaml` with a built-in fallback parser if it isn't installed.
 - `torch` + `transformers` + `adapters` — **only** if you use `--method specter2` (neural embeddings): `pip install torch transformers adapters`.
+- `sentence-transformers` — **only** if you use `--method rerank` (local cross-encoder reranker): `pip install sentence-transformers`.
 
 ---
 
@@ -165,6 +166,19 @@ both sides are embedded as `title [SEP] abstract`, the form the model was traine
 parsed down to their own title+abstract (falling back to the raw page text only when none parses)
 rather than fed the three-page read. Only step 1 changes — the normalize/blend/map steps and the
 TF-IDF top-terms summary are identical either way.
+
+Pass `--method rerank` for a **retrieve-then-rerank** pipeline: the TF-IDF pass first shortlists the
+**top-N** submissions (`--rerank-topn`; default **auto-scales** as `max(150, 3 × --positive-frac ×
+#submissions)` so the shortlist always covers the positive bid band, since reranked candidates sort
+above the rest), then a **local cross-encoder** rescores only those. Unlike TF-IDF/SPECTER2, which embed each text on its own and compare vectors, a cross-encoder
+reads each *(your paper, submission)* pair **together** and judges their relevance directly — more
+precise, but too slow to run on the whole pool, hence the shortlist. Each candidate is scored against
+your papers and aggregated with a top-3 mean; the default model is `BAAI/bge-reranker-v2-m3`
+(multilingual, long-abstract-friendly; override with `--rerank-model`). The shortlisted candidates are
+ranked by the cross-encoder and sit **above** the non-shortlisted submissions (which keep their TF-IDF
+order), then the usual normalize/blend/map steps run unchanged. Needs `pip install
+sentence-transformers` and a one-time model download; runs offline and deterministically afterwards
+(slower on CPU).
 
 The only judgment input is `topic_interests.csv`; everything else is mechanical and in `config.yaml`.
 
