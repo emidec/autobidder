@@ -7,10 +7,20 @@ turn your reviewing interests into bids:
 2. `score_bids.py` — build your profile from those ratings + your papers, and fill every submission's
    bid (HotCRP uses roughly **−20…20**).
 
-Runs locally with `scikit-learn` + `pypdf` (no network); the optional `--method specter2` adds a
-one-time model download.
+Everything runs locally. You choose between **three interchangeable matching methods** with one flag
+(`--method`) — only the similarity step differs, the rest of the pipeline is identical:
 
-**Status:** beta — `v0.1.0-beta`.
+- **`tfidf`** *(default)* — lexical TF-IDF cosine. Light and fully offline; needs only
+  `scikit-learn` + `pypdf`, no model download.
+- **`specter2`** — neural scientific-paper embeddings (AllenAI SPECTER2). Matches on *meaning*, not
+  just shared wording.
+- **`rerank`** — TF-IDF shortlists the top candidates, then a local cross-encoder rescores them
+  (retrieve-then-rerank). The most precise, and still fully local.
+
+`specter2` and `rerank` each add an optional dependency and a one-time model download — see
+[Requirements](#requirements) and [How it works](#how-it-works) for details.
+
+**Status:** beta — `v0.2.0-beta`.
 
 ---
 
