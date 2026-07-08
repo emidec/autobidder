@@ -602,14 +602,16 @@ def main(argv=None):
                          % (RERANK_TOPN_FLOOR, RERANK_TOPN_CUSHION))
     ap.add_argument("--rerank-model", dest="rerank_model", default=DEFAULT_RERANK_MODEL,
                     help="--method rerank: cross-encoder model id (default: %s)" % DEFAULT_RERANK_MODEL)
-    ap.add_argument("--profile-out", dest="profile_out", default=DEFAULT_PROFILE,
-                    help="where to save the profile summary JSON (default: %s)" % DEFAULT_PROFILE)
+    ap.add_argument("--profile-out", dest="profile_out", default=None,
+                    help="where to save the profile summary JSON (default: %s with a run "
+                         "timestamp inserted, so re-runs don't overwrite)" % DEFAULT_PROFILE)
     ap.add_argument("--positive-frac", dest="positive_frac", type=float, default=0.1, metavar="F",
                     help="target fraction (0..1) of papers to bid positively on, within +/-10 points "
                          "(default: 0.1)")
     ap.add_argument("--config", default=DEFAULT_CONFIG,
                     help="scoring parameters YAML (default: config.yaml beside this script)")
-    ap.add_argument("-o", "--output", help="output CSV path (default: <input>.scored.csv; abstracts removed)")
+    ap.add_argument("-o", "--output", help="output CSV path (default: <input>.scored.<timestamp>.csv, "
+                    "abstracts removed; the timestamp keeps re-runs from overwriting)")
     ap.add_argument("--keep-original", dest="keep_original", action="store_true",
                     help="keep the input CSV (by default it is deleted once the scored output is written)")
     ap.add_argument("--zero-below", dest="zero_below", type=int, default=None, metavar="N",
@@ -627,6 +629,10 @@ def main(argv=None):
     if args.rerank_topn is not None and args.rerank_topn < 1:
         ap.error("--rerank-topn must be a positive integer")
     load_config(args.config)
+
+    # one timestamp per run, stamped into every default output name so repeated runs
+    # never clobber earlier results (and so the change summary can find the prior run).
+    run_ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
     # read submissions
     with open(args.input, newline="", encoding="utf-8", errors="replace") as fh:
@@ -705,7 +711,12 @@ def main(argv=None):
     profile["topic_affinity"] = collections.OrderedDict(
         (t, {"affinity": aff[t], "interest": interests[t]}) for t in interests)
     profile["corpus_top_terms"] = top_terms
-    with open(args.profile_out, "w", encoding="utf-8") as fh:
+    if args.profile_out:
+        profile_path = args.profile_out
+    else:
+        pstem, pext = os.path.splitext(DEFAULT_PROFILE)
+        profile_path = "%s.%s%s" % (pstem, run_ts, pext)          # timestamped default
+    with open(profile_path, "w", encoding="utf-8") as fh:
         json.dump(profile, fh, indent=2, ensure_ascii=False)
 
     # ---- output path ----
@@ -713,7 +724,7 @@ def main(argv=None):
         out_path = args.output
     else:
         stem, ext = os.path.splitext(args.input)
-        out_path = stem + ".scored" + (ext or ".csv")
+        out_path = "%s.scored.%s%s" % (stem, run_ts, ext or ".csv")   # timestamped default
 
     # write WITHOUT the abstract column
     out_fields = [f for f in fields if f != "abstract"]
@@ -738,7 +749,7 @@ def main(argv=None):
     if not args.quiet:
         print(report)
         print(target_note)
-        tail = "\nwrote %d bids -> %s  (profile: %s)" % (len(rows), out_path, args.profile_out)
+        tail = "\nwrote %d bids -> %s  (profile: %s)" % (len(rows), out_path, profile_path)
         if args.zero_below is not None:
             tail += "\nzeroed %d bids below %+d (--zero-below)" % (zeroed_below, args.zero_below)
         if removed_original:

@@ -98,6 +98,10 @@ of papers (`--positive-frac`, default 0.1). **By default it deletes the original
 scored output, with the `abstract` column stripped** (`paper, title, preference, topics`) — pass
 `--keep-original` to keep the input. It prints a histogram report; `--report` saves it.
 
+Every run stamps its outputs with a timestamp — `revprefs.scored.<YYYYMMDD-HHMMSS>.csv` and a matching
+`reviewer-expertise-profile.<YYYYMMDD-HHMMSS>.json` — so repeated runs never overwrite earlier results.
+(Pass an explicit `-o`/`--profile-out` to choose fixed names instead.)
+
 ---
 
 ## Files
@@ -109,9 +113,9 @@ scored output, with the `abstract` column stripped** (`paper, title, preference,
 | `config.yaml` | Scoring parameters (`bid_max`, `interest_weight`, `sem_gain`). Edit to taste. |
 | `topic_interests.csv` | **you edit** — `topic,interest` on a **-2..2** scale. Made by `make_topic_interests.py`. |
 | `papers_pdf/` | your papers as PDFs (**≥5 unique**) — matched semantically against each submission. |
-| `reviewer-expertise-profile.json` | *(generated — don't hand-edit)* your topic interests + top TF-IDF terms of your papers, for inspection. |
+| `reviewer-expertise-profile.<ts>.json` | *(generated — don't hand-edit)* your topic interests + top TF-IDF terms of your papers, for inspection. Timestamped per run. |
 | `revprefs.csv` | the round's submissions (HotCRP export: `paper, title, preference[, abstract, topics]`). Deleted once scored, unless `--keep-original`. |
-| `revprefs.scored.csv` | the scored output — **abstracts removed** — this is what you upload back to HotCRP. |
+| `revprefs.scored.<ts>.csv` | the scored output — **abstracts removed** — this is what you upload back to HotCRP. Timestamped per run. |
 
 (CSV files and `papers_pdf/` are git-ignored — they hold conference-confidential data.)
 
