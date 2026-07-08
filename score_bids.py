@@ -577,6 +577,94 @@ def make_report(rows, mode):
     return "\n".join(lines)
 
 
+# ---------------------------- change tracking --------------------------------
+def _load_bids(path):
+    """paper_id -> (bid, title) from a scored CSV (best-effort; skips unparsable rows)."""
+    out = {}
+    try:
+        with open(path, newline="", encoding="utf-8", errors="replace") as fh:
+            for r in csv.DictReader(fh):
+                key = (r.get("paper") or "").strip()
+                if not key:
+                    continue
+                try:
+                    out[key] = (int(r["preference"]), (r.get("title") or ""))
+                except (KeyError, ValueError, TypeError):
+                    continue
+    except OSError:
+        pass
+    return out
+
+
+def _find_previous_output(out_path, run_ts):
+    """The most recent EARLIER scored CSV in the same series: the same output name with a
+    different run timestamp. We build the glob by swapping this run's timestamp for '*', so a
+    custom -o that doesn't contain the timestamp has no series and returns None."""
+    base = os.path.basename(out_path)
+    if run_ts not in base:
+        return None
+    pattern = os.path.join(os.path.dirname(out_path) or ".", base.replace(run_ts, "*"))
+    here = os.path.abspath(out_path)
+    cands = [p for p in glob.glob(pattern)
+             if os.path.isfile(p) and os.path.abspath(p) != here]
+    return max(cands, key=os.path.getmtime) if cands else None
+
+
+def make_change_summary(prev_path, rows):
+    """Human-readable diff of the current bids vs the previous run's scored CSV, keyed on
+    the `paper` id. Always returns text (notes 'first run' when there's nothing to compare)."""
+    new = {}
+    for r in rows:
+        key = (r.get("paper") or "").strip()
+        if not key:
+            continue
+        try:
+            new[key] = (int(r["preference"]), (r.get("title") or ""))
+        except (ValueError, TypeError):
+            continue
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    lines = ["Bid change summary", "=" * 60, "generated : %s" % now]
+    if not prev_path:
+        lines += ["previous  : (none -- first run in this series)",
+                  "papers    : %d" % len(new), "",
+                  "No previous output to compare against."]
+        return "\n".join(lines)
+
+    prev = _load_bids(prev_path)
+    common = [k for k in new if k in prev]
+    added = [k for k in new if k not in prev]
+    removed = [k for k in prev if k not in new]
+    changed = [(k, prev[k][0], new[k][0]) for k in common if prev[k][0] != new[k][0]]
+    into_pos = sum(1 for _, o, n in changed if o <= 0 < n)
+    out_of_pos = sum(1 for _, o, n in changed if n <= 0 < o)
+    mad = (sum(abs(n - o) for _, o, n in changed) / len(changed)) if changed else 0.0
+
+    lines += [
+        "previous  : %s" % os.path.basename(prev_path),
+        "papers    : %d previous, %d current" % (len(prev), len(new)), "",
+        "unchanged : %d" % (len(common) - len(changed)),
+        "changed   : %d   (mean |delta| %.2f)" % (len(changed), mad),
+        "  into positive  (<=0 -> >0) : %d" % into_pos,
+        "  out of positive (>0 -> <=0): %d" % out_of_pos,
+        "added     : %d   (submissions new this round)" % len(added),
+        "removed   : %d   (submissions gone this round)" % len(removed),
+    ]
+    if changed:
+        movers = sorted(changed, key=lambda t: -abs(t[2] - t[1]))
+        lines += ["", "biggest movers (up to 20):"]
+        for k, o, n in movers[:20]:
+            lines.append("  %+3d -> %+3d  (%+d)  %s" % (o, n, n - o, (new[k][1] or "")[:64]))
+    if added:
+        lines += ["", "new submissions (up to 20):"]
+        for k in added[:20]:
+            lines.append("  bid %+3d    %s" % (new[k][0], (new[k][1] or "")[:64]))
+    if removed:
+        lines += ["", "dropped submissions (up to 20):"]
+        for k in removed[:20]:
+            lines.append("  was %+3d    %s" % (prev[k][0], (prev[k][1] or "")[:64]))
+    return "\n".join(lines)
+
+
 # --------------------------------- main --------------------------------------
 def main(argv=None):
     ap = argparse.ArgumentParser(
@@ -726,12 +814,20 @@ def main(argv=None):
         stem, ext = os.path.splitext(args.input)
         out_path = "%s.scored.%s%s" % (stem, run_ts, ext or ".csv")   # timestamped default
 
+    # find the previous run in this series BEFORE writing the new file
+    prev_output = _find_previous_output(out_path, run_ts)
+
     # write WITHOUT the abstract column
     out_fields = [f for f in fields if f != "abstract"]
     with open(out_path, "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=out_fields, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
+
+    # ---- change summary vs the previous most-recent output ----
+    changes_path = os.path.splitext(out_path)[0] + ".changes.txt"
+    with open(changes_path, "w", encoding="utf-8") as fh:
+        fh.write(make_change_summary(prev_output, rows) + "\n")
 
     # delete the original (abstract-laden) input unless asked to keep it
     removed_original = False
@@ -752,6 +848,8 @@ def main(argv=None):
         tail = "\nwrote %d bids -> %s  (profile: %s)" % (len(rows), out_path, profile_path)
         if args.zero_below is not None:
             tail += "\nzeroed %d bids below %+d (--zero-below)" % (zeroed_below, args.zero_below)
+        tail += "\nchange summary -> %s%s" % (
+            changes_path, "" if prev_output else "  (first run in this series)")
         if removed_original:
             tail += "\ndeleted original %s; use --keep-original to keep it" % args.input
         print(tail)

@@ -102,6 +102,10 @@ Every run stamps its outputs with a timestamp — `revprefs.scored.<YYYYMMDD-HHM
 `reviewer-expertise-profile.<YYYYMMDD-HHMMSS>.json` — so repeated runs never overwrite earlier results.
 (Pass an explicit `-o`/`--profile-out` to choose fixed names instead.)
 
+Each run also writes a `…changes.txt` next to the scored CSV, diffing the new bids against the previous
+run in the same series: how many bids changed, moved into/out of positive, the biggest movers, and any
+submissions added or dropped. The first run just notes there's nothing to compare against.
+
 ---
 
 ## Files
@@ -116,6 +120,7 @@ Every run stamps its outputs with a timestamp — `revprefs.scored.<YYYYMMDD-HHM
 | `reviewer-expertise-profile.<ts>.json` | *(generated — don't hand-edit)* your topic interests + top TF-IDF terms of your papers, for inspection. Timestamped per run. |
 | `revprefs.csv` | the round's submissions (HotCRP export: `paper, title, preference[, abstract, topics]`). Deleted once scored, unless `--keep-original`. |
 | `revprefs.scored.<ts>.csv` | the scored output — **abstracts removed** — this is what you upload back to HotCRP. Timestamped per run. |
+| `revprefs.scored.<ts>.changes.txt` | *(generated)* what changed vs. the previous run's bids (movers, added/dropped submissions). |
 
 (CSV files and `papers_pdf/` are git-ignored — they hold conference-confidential data.)
 

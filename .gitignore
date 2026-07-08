@@ -12,6 +12,9 @@
 # Reviewer expertise profile — confidential, generated per reviewer (timestamped per run)
 reviewer-expertise-profile*.json
 
+# Per-run change summaries — confidential (contain paper titles + bids)
+*.changes.txt
+
 # SPECTER2 embedding cache (generated; regenerates from your papers/submissions)
 .specter2_cache.npz
 
