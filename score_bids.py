@@ -612,6 +612,10 @@ def main(argv=None):
     ap.add_argument("-o", "--output", help="output CSV path (default: <input>.scored.csv; abstracts removed)")
     ap.add_argument("--keep-original", dest="keep_original", action="store_true",
                     help="keep the input CSV (by default it is deleted once the scored output is written)")
+    ap.add_argument("--zero-below", dest="zero_below", type=int, default=None, metavar="N",
+                    help="after scoring, set every bid strictly below N to 0 (neutral) -- e.g. "
+                         "--zero-below 5 keeps only bids >= +5 and zeroes the rest (negatives "
+                         "included). Applied after --positive-frac.")
     ap.add_argument("--report", help="also write the text report to this path")
     ap.add_argument("--quiet", action="store_true", help="don't print the report")
     args = ap.parse_args(argv)
@@ -668,6 +672,16 @@ def main(argv=None):
     values = [clamp((1 - iw) * sem_signal[i] + iw * topic_base[i], _REF_MIN, _REF_MAX)
               for i in range(len(rows))]
     prefs = bids_for_positive_fraction(values, args.positive_frac)
+    zeroed_below = 0
+    if args.zero_below is not None:                       # floor sub-threshold bids to neutral
+        capped = []
+        for p in prefs:
+            if p < args.zero_below:
+                zeroed_below += (p != 0)
+                capped.append(0)
+            else:
+                capped.append(p)
+        prefs = capped
     for r, p in zip(rows, prefs):
         r["preference"] = str(p)
     achieved = sum(1 for p in prefs if p > 0) / len(prefs)
@@ -725,6 +739,8 @@ def main(argv=None):
         print(report)
         print(target_note)
         tail = "\nwrote %d bids -> %s  (profile: %s)" % (len(rows), out_path, args.profile_out)
+        if args.zero_below is not None:
+            tail += "\nzeroed %d bids below %+d (--zero-below)" % (zeroed_below, args.zero_below)
         if removed_original:
             tail += "\ndeleted original %s; use --keep-original to keep it" % args.input
         print(tail)
