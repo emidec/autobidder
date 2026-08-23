@@ -238,6 +238,10 @@ the conference's **submissions**, and your papers are projected into that same s
 - a term must appear in **≥2 submissions** but **< 30%** of them — dropping both rare noise and generic
   words — with term frequency scaled sub-linearly (a word used 10× isn't 10× as important).
 
+Those two bounds can only both hold once the pool has **at least 7 submissions**, so smaller rounds stop
+with an explanation rather than a traceback — as does a pool whose abstracts are so alike that every
+term lands above the 30% ceiling, which usually means the `abstract` column is empty.
+
 A PDF only contributes if text can be extracted from it. Scanned, image-only, and encrypted files
 yield nothing, so each one is **named on stderr and skipped**, and the run **stops** if fewer than 5
 papers with usable text remain — without them the bids would be scored on your topic interests alone.

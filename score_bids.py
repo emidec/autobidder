@@ -371,12 +371,26 @@ def _topk_mean(sim, k=3):
     return np.partition(sim, -k, axis=1)[:, -k:].mean(axis=1)
 
 
-def _tfidf_fit(paper_texts, sub_texts):
+TFIDF_MIN_DF = 2       # a term must appear in at least this many submissions ...
+TFIDF_MAX_DF = 0.3     # ... and in fewer than this fraction of them
+# Both conditions can only hold together once the pool is big enough for MAX_DF to admit
+# MIN_DF documents; below that, no term can qualify and no vocabulary exists at all.
+TFIDF_MIN_SUBMISSIONS = int(math.ceil(TFIDF_MIN_DF / TFIDF_MAX_DF))
+
+
+def _tfidf_fit(paper_texts, sub_texts, required=True):
     """Fit TF-IDF on the CONFERENCE submissions and project your papers into that space.
 
     Returns (S, P, vectorizer). Fitting on the submission pool means terms specific to your
     papers but absent from it (your name, affiliation, venue boilerplate) never enter the
     vocabulary, and domain-generic words get low IDF weight.
+
+    The two document-frequency bounds can leave nothing behind -- for a pool too small to
+    satisfy them at all, or one whose texts are so alike that every term lands above MAX_DF.
+    sklearn signals both with a bare ValueError, so they are reported as what the user can act
+    on instead. required=False downgrades that to a warning and returns (None, None, None), for
+    callers that only wanted the cosmetic top-terms summary and shouldn't lose a finished run
+    over it.
     """
     try:
         from sklearn.feature_extraction.text import TfidfVectorizer, ENGLISH_STOP_WORDS
@@ -384,11 +398,36 @@ def _tfidf_fit(paper_texts, sub_texts):
         sys.exit("scikit-learn is required: pip install scikit-learn")
     import warnings
     warnings.filterwarnings("ignore")
+
+    def fail(msg):
+        if required:
+            sys.exit("ERROR: " + msg)
+        sys.stderr.write("WARNING: " + msg + "\n  The profile's top-terms summary will be "
+                         "empty; the bids themselves are unaffected.\n")
+
+    n = len(sub_texts)
+    if n < TFIDF_MIN_SUBMISSIONS:
+        fail("%d submission(s) is too few to build a vocabulary from: a term has to appear in at "
+             "least %d of them but in fewer than %.0f%%, and no term can do both below %d "
+             "submissions.\nThis tool is built for a full reviewing round -- with a pool this "
+             "small, bid by hand."
+             % (n, TFIDF_MIN_DF, 100 * TFIDF_MAX_DF, TFIDF_MIN_SUBMISSIONS))
+        return None, None, None
+
     stop = list(ENGLISH_STOP_WORDS.union(_EXTRA_STOP))
     vec = TfidfVectorizer(preprocessor=_clean, stop_words=stop,
                           token_pattern=r"(?u)\b[a-z][a-z]+\b",   # alphabetic tokens, 2+ chars
-                          ngram_range=(1, 2), min_df=2, max_df=0.3, sublinear_tf=True)
-    S = vec.fit_transform(sub_texts)
+                          ngram_range=(1, 2), min_df=TFIDF_MIN_DF, max_df=TFIDF_MAX_DF,
+                          sublinear_tf=True)
+    try:
+        S = vec.fit_transform(sub_texts)
+    except ValueError:
+        fail("no usable vocabulary in these %d submissions: every candidate term was either too "
+             "rare (in fewer than %d of them) or too common (in %.0f%% or more).\nThat happens "
+             "when the abstracts are near-identical, or mostly empty -- check that the 'abstract' "
+             "column is actually populated."
+             % (n, TFIDF_MIN_DF, 100 * TFIDF_MAX_DF))
+        return None, None, None
     P = vec.transform(paper_texts)
     return S, P, vec
 
@@ -501,8 +540,10 @@ def _specter2_scores(paper_texts, sub_pairs, cache_path=DEFAULT_EMB_CACHE):
         _save_emb_cache(cache_path, SPECTER2_MODEL, cache)
     best = _topk_mean(cosine_similarity(sub_emb, pap_emb), k=3)
     sub_tfidf = [(t + ". " + a) for t, a in sub_pairs]
-    _, P, vec = _tfidf_fit(paper_texts, sub_tfidf)    # readable top-terms summary for the profile
-    return best, corpus_top_terms(vec, P)
+    # only for the profile's readable summary, so a pool with no vocabulary must not throw away
+    # an otherwise finished (and expensive) embedding run
+    _, P, vec = _tfidf_fit(paper_texts, sub_tfidf, required=False)
+    return best, (corpus_top_terms(vec, P) if vec is not None else [])
 
 
 def _rerank_scores(paper_texts, sub_pairs, topn=RERANK_TOPN_FLOOR, model_id=DEFAULT_RERANK_MODEL):
