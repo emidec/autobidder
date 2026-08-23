@@ -1,30 +1,205 @@
 # autobidder — reviewer bidding toolkit
 
-A small, self-service toolkit for HotCRP-run reviewing rounds (any conference). **Two commands**
-turn your reviewing interests into bids:
+Fill in your HotCRP reviewer bids automatically. Rate the conference's topics once, point the tool at
+your own papers, and it scores every submission by how well it matches your work. Everything runs
+locally — no submission data leaves your machine.
 
-1. `make_topic_interests.py` — list the conference's topics for you to rate.
-2. `score_bids.py` — build your profile from those ratings + your papers, and fill every submission's
-   bid (HotCRP uses roughly **−20…20**).
-
-Everything runs locally. You choose between **three interchangeable matching methods** with one flag
-(`--method`) — only the similarity step differs, the rest of the pipeline is identical:
-
-- **`tfidf`** *(default)* — lexical TF-IDF cosine. Light and fully offline; needs only
-  `scikit-learn` + `pypdf`, no model download.
-- **`specter2`** — neural scientific-paper embeddings (AllenAI SPECTER2). Matches on *meaning*, not
-  just shared wording.
-- **`rerank`** — TF-IDF shortlists the top candidates, then a local cross-encoder rescores them
-  (retrieve-then-rerank). The most precise, and still fully local.
-
-`specter2` and `rerank` each add an optional dependency and a one-time model download — see
-[Requirements](#requirements) and [How it works](#how-it-works) for details.
-
-**Status:** beta — `v0.2.0-beta`.
+**Status:** beta — `v0.3.0`.
 
 ---
 
-## Pipeline
+## Quickstart
+
+```bash
+pip install scikit-learn pypdf
+```
+
+Then, once per reviewing round:
+
+**1. Put your papers in `papers_pdf/`.** At least 5 PDFs, each with a real text layer — scans and
+image-only files are skipped, and the run stops if fewer than 5 usable ones remain. Submissions get
+matched against these.
+
+**2. Export the submissions from HotCRP** as `revprefs.csv`, with the `abstract` and `topics` columns
+included. See [The HotCRP round trip](#the-hotcrp-round-trip) for the click-path.
+
+**3. Rate the conference's topics:**
+
+```bash
+python3 make_topic_interests.py revprefs.csv
+```
+
+Open `topic_interests.csv` and set each topic's `interest` to an integer from **−2 to +2** — `2` = very
+high, `1` = high, `0` = neutral, `-1` = low, `-2` = very low. Leave anything you don't care about at
+`0`. This is the only judgment call in the whole tool.
+
+**4. Score the submissions and fill your bids:**
+
+```bash
+python3 score_bids.py revprefs.csv
+```
+
+This writes `revprefs.scored.<timestamp>.csv` with the `preference` column filled in, and prints a
+histogram of the bids it chose.
+
+**5. Upload that scored CSV back to HotCRP.** Done.
+
+> ⚠️ **`score_bids.py` deletes `revprefs.csv` by default.** The export contains every submission's
+> abstract; the scored output has them stripped, so the confidential copy doesn't linger on disk. Pass
+> `--keep-original` to keep it — useful if you want to re-run with different settings.
+
+Variations you're most likely to want:
+
+```bash
+python3 score_bids.py revprefs.csv --keep-original       # keep the abstract-laden input
+python3 score_bids.py revprefs.csv --positive-frac 0.3   # bid positively on ~30%, not ~10%
+python3 score_bids.py revprefs.csv --zero-below 5        # only surface bids of +5 or better
+python3 score_bids.py revprefs.csv --method rerank       # most precise matching (needs one more package)
+```
+
+---
+
+## The HotCRP round trip
+
+**Export.** Once submissions are visible, HotCRP shows a **Review preferences** link on the home page,
+listing every submission with a preference box. Select all papers and use the page's **Download**
+action → *Review preferences*. The default columns are `paper, title, preference`; add the **abstract**
+and **topics** columns to the view first (the **Show** menu / column options on the search bar → enable
+*Abstract* and *Topics*), then download. Save it as `revprefs.csv`.
+
+`score_bids.py` checks the columns before it does anything else:
+
+| Column | |
+|---|---|
+| `paper` | **required** — HotCRP matches rows by paper id on upload, so an export without it can't be uploaded at all |
+| `preference` | **required** — this is the column that gets filled in |
+| `abstract` | strongly wanted — without it, matching falls back to titles alone |
+| `topics` | strongly wanted — without it your interests can't be applied, leaving `interest_weight` of every score a constant 0 |
+
+The run warns when `abstract` or `topics` is missing rather than failing, so a title-only round is
+possible — just much weaker.
+
+**Upload.** Upload the scored CSV on the same **Review preferences** page via its **Upload** action (or
+**Assignments → Upload**). HotCRP matches each row by its `paper` id and reads the `preference` column;
+the other columns are ignored.
+
+> Labels vary a little between HotCRP versions. If your site's controls differ, the rule is: get a CSV
+> that includes `paper, title, preference, abstract, topics`, and upload one with `paper` +
+> `preference`.
+
+---
+
+## Options
+
+### Flags
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--positive-frac F` | `0.1` | Fraction of papers to bid positively on (0–1). See below. |
+| `--zero-below N` | — | Floor every bid below `N` to `0` (neutral). See below. |
+| `--keep-original` | off | Don't delete the input CSV after scoring. |
+| `--method M` | `tfidf` | Similarity method: `tfidf`, `specter2`, or `rerank`. See [Matching methods](#matching-methods). |
+| `-o PATH` | timestamped | Output CSV path. |
+| `--report PATH` | — | Also write the histogram report to a file. |
+| `--quiet` | off | Don't print the report. |
+| `--topic-interests PATH` | `topic_interests.csv` | Where your topic ratings live. |
+| `--pdfs DIR` | `papers_pdf` | Folder of your paper PDFs. |
+| `--profile-out PATH` | timestamped | Where to save the profile summary JSON. |
+| `--rerank-topn N` | auto | `rerank` only: how many TF-IDF candidates the cross-encoder rescores. |
+| `--rerank-model ID` | `BAAI/bge-reranker-v2-m3` | `rerank` only: cross-encoder model id. |
+| `--emb-cache PATH` | `.specter2_cache.npz` | `specter2` only: embedding cache file. |
+
+**`--positive-frac F`** — how many papers you want to end up wanting. It puts the threshold just below
+the target count and rescales each side to the full range, so that many end up positive **and** your
+strongest papers still reach ±`bid_max`. The run reports the fraction it achieved; ties at the
+threshold are the one thing that can hold it below target, and it warns if the miss exceeds 10 points.
+
+**`--zero-below N`** — sets every bid strictly below `N` to `0`, negatives included. `--zero-below 5`
+keeps only bids of +5 or better, so you surface just the papers you actively want. Applied after
+`--positive-frac` and reported separately: the run states what `--positive-frac` achieved on its own
+terms, then how many bids were zeroed and how many positives remain. `N` may not exceed `bid_max`,
+since nothing would survive it.
+
+**Re-rating a topic** — edit its `interest` in `topic_interests.csv` and re-run `score_bids.py`.
+Nothing else needs rebuilding.
+
+### config.yaml
+
+| Key | Default | What it does |
+|---|---|---|
+| `interest_weight` | `0.35` | How much your topic ratings steer the bid vs. similarity to your papers. `0` = pure paper-similarity, `1` = pure topic interests. |
+| `sem_gain` | `9.0` | Shapes the rank curve. `9` is linear; higher pushes mid-rank papers toward the extremes, i.e. more separation between near-miss and on-target. |
+| `bid_max` | `20` | The output range: bids are written in `[-bid_max, bid_max]`. An integer in `[1, bid_limit]`. |
+| `bid_limit` | `100` | Validation ceiling for `bid_max` — HotCRP's own maximum. |
+| `ref_max` | `20` | Internal reference span the score is computed on, before it's mapped to `[-bid_max, bid_max]`. |
+
+---
+
+## Matching methods
+
+All three do the same thing — score each submission by similarity to your papers — and differ only in
+how that similarity is computed. Everything downstream (the interest blend, `--positive-frac`, the
+report) is identical, so you can switch freely between rounds or re-run with `--keep-original` and
+compare.
+
+| `--method` | Needs | Speed | Good for |
+|---|---|---|---|
+| **`tfidf`** *(default)* | nothing extra | fast | Shared vocabulary. Light, fully offline, no model download. |
+| **`specter2`** | `pip install torch transformers adapters` | slower on CPU | Meaning rather than wording — catches related work phrased differently. |
+| **`rerank`** | `pip install sentence-transformers` | slowest on CPU | The most precise. TF-IDF shortlists, then a cross-encoder rescores the shortlist. |
+
+`specter2` and `rerank` each download their model once, then run offline and deterministically.
+
+**`specter2`** uses AllenAI SPECTER2, trained specifically for paper-to-paper similarity. Embeddings
+are cached in `.specter2_cache.npz` keyed by the text they came from, so re-runs only embed what's new
+— a fully-cached re-run doesn't even load the model. Override the path with `--emb-cache`.
+
+**`rerank`** uses TF-IDF to shortlist the top-N submissions, then has a local cross-encoder rescore
+only those. A cross-encoder reads each *(your paper, submission)* pair **together** and judges their
+relevance directly, rather than embedding each text alone and comparing vectors — more precise, but too
+slow for a whole pool, hence the shortlist. `--rerank-topn` defaults to auto-scaling with the pool and
+your target so the shortlist always covers the positive bid band; override the model with
+`--rerank-model`.
+
+---
+
+## Files
+
+| File | Role |
+|---|---|
+| `make_topic_interests.py` | Creates a blank `topic_interests.csv` (every topic at 0) from the preferences CSV. Stdlib only. |
+| `score_bids.py` | Scores submissions by similarity to your papers (+ interests) and fills the bids. |
+| `config.yaml` | Scoring parameters. Edit to taste. |
+| `topic_interests.csv` | **you edit** — `topic,interest` on a **-2..2** scale. Made by `make_topic_interests.py`; each run reports unrated tags and unparsable values. |
+| `papers_pdf/` | your papers as PDFs (**≥5 unique, with a text layer**) — matched semantically against each submission. |
+| `revprefs.csv` | the round's submissions (HotCRP export). Deleted once scored, unless `--keep-original`. |
+| `revprefs.scored.<ts>.csv` | the scored output — **abstracts removed** — this is what you upload back to HotCRP. |
+| `revprefs.scored.<ts>.changes.txt` | *(generated)* what changed vs. the previous run's bids (movers, added/dropped submissions). |
+| `reviewer-expertise-profile.<ts>.json` | *(generated — don't hand-edit)* your topic interests + top TF-IDF terms of your papers, for inspection. |
+
+Every run stamps its outputs with a timestamp, so repeated runs never overwrite earlier results. Pass
+an explicit `-o` / `--profile-out` to choose fixed names instead.
+
+The `…changes.txt` diffs the new bids against the previous run: how many changed, moved into or out of
+positive, the biggest movers, and any submissions added or dropped. The baseline is the newest run
+stamped earlier than this one — or, with a fixed `-o`, the file at that path that this run replaces,
+read before it's overwritten. The first run just notes there's nothing to compare against.
+
+(CSV files and `papers_pdf/` are git-ignored — they hold conference-confidential data.)
+
+---
+
+## Requirements
+
+- **Python 3.7+** for the scripts themselves; in practice your `scikit-learn` build sets the floor
+  (recent versions need 3.10+).
+- `scikit-learn` and `pypdf` — required. `pip install scikit-learn pypdf`
+- `PyYAML` — optional; `score_bids.py` reads `config.yaml` with a built-in fallback parser without it.
+- Per-method extras are listed under [Matching methods](#matching-methods).
+
+---
+
+## How it works
 
 ```
    revprefs.csv
@@ -41,124 +216,9 @@ Everything runs locally. You choose between **three interchangeable matching met
                                    config.yaml
 ```
 
-`score_bids.py` builds the profile on the fly (the topic interests differ every conference, so there's
-nothing reusable to build separately) and saves it to `reviewer-expertise-profile.json` for inspection.
-
----
-
-## Getting the CSV in and out of HotCRP
-
-**Download (with abstracts).** Once submissions are visible, HotCRP shows a **Review preferences** link
-on the home page; it lists every submission with a preference box. To export a CSV, select all papers
-and use the page's **Download** action → *Review preferences*. The default columns are
-`paper, title, preference`; to also include the **abstract** and **topics** columns this toolkit scores
-on, add those fields to the view first (the **Show** menu / column options on the search bar → enable
-*Abstract* and *Topics*), then download. Save it as `revprefs.csv`.
-
-`score_bids.py` checks the columns before it does anything else. **`paper` and `preference` are
-required** — HotCRP matches rows by `paper` on upload, so an export without it can't be uploaded
-at all. `abstract` and `topics` are optional but strongly wanted, and the run warns when either is
-absent: without `abstract` it matches on titles alone, and without `topics` your interests can't be
-applied, leaving `interest_weight` of every score as a constant 0.
-
-> ⚠️ **Heads-up:** this `revprefs.csv` contains the submissions' **abstracts**, and `score_bids.py`
-> **deletes it by default** after scoring — the uploadable output it writes has the abstracts stripped.
-> Pass `--keep-original` if you want to retain the abstract-containing CSV.
-
-**Upload (your bids).** After scoring, upload the filled CSV back on the same **Review preferences**
-page via its **Upload** action (or **Assignments → Upload**). HotCRP matches each row by its `paper` id
-and reads the `preference` column; the other columns are ignored.
-
-> The exact labels may vary a little between HotCRP versions — if your site's controls differ, the rule is:
-> get a CSV that includes `paper, title, preference, abstract, topics`, and upload one with `paper` +
-> `preference`.
-
----
-
-## The two steps
-
-### 1. Rate the conference topics
-
-```bash
-python3 make_topic_interests.py revprefs.csv        # writes topic_interests.csv: every topic at 0
-```
-
-Open `topic_interests.csv` and set each topic's `interest`. **Scale: an integer from -2 to +2** —
-`2` = very high, `1` = high, `0` = neutral, `-1` = low, `-2` = very low. (The scale is also printed at
-the top of the file.) Leave anything you don't care about at `0`.
-
-Topics are matched by exact name, so `score_bids.py` checks this file every run and reports on
-stderr:
-
-- any `interest` that isn't a plain integer in −2..2, with the value it was read as (a word reads
-  as `0`, an out-of-range number is clamped);
-- topic tags on the submissions with **no row here** — they score neutral, which is what you'd
-  see if the conference added or renamed a topic after you built the file, or a name got mistyped;
-- rows here that match **no submission** this round, e.g. left over from a previous conference.
-
-None of these stop the run — a conference can legitimately carry topics you never rated — but a
-tag you meant to rate showing up as unrated is worth knowing before you upload.
-
-### 2. Build the profile + fill the bids (one command)
-
-```bash
-python3 score_bids.py revprefs.csv                                # default: ~10% positive -> revprefs.scored.csv
-python3 score_bids.py revprefs.csv --keep-original                # also keep the original revprefs.csv
-python3 score_bids.py revprefs.csv -o filled.csv --report report.txt
-python3 score_bids.py revprefs.csv --positive-frac 0.3           # bid positively on ~30% of papers instead
-```
-
-This uses `topic_interests.csv` (override with `--topic-interests`) and your papers in `papers_pdf/`
-(**at least 5 unique PDFs with extractable text, or it stops**). It scores each submission by
-**TF-IDF cosine similarity to your most-similar papers** (the top few), blends that with your
-topic interests, writes
-`reviewer-expertise-profile.json`, and fills the `preference` column — targeting a positive bid on ~10%
-of papers (`--positive-frac`, default 0.1). **By default it deletes the original input and keeps only the
-scored output, with the `abstract` column stripped** (`paper, title, preference, topics`) — pass
-`--keep-original` to keep the input. It prints a histogram report; `--report` saves it.
-
-Every run stamps its outputs with a timestamp — `revprefs.scored.<YYYYMMDD-HHMMSS>.csv` and a matching
-`reviewer-expertise-profile.<YYYYMMDD-HHMMSS>.json` — so repeated runs never overwrite earlier results.
-(Pass an explicit `-o`/`--profile-out` to choose fixed names instead.)
-
-Each run also writes a `…changes.txt` next to the scored CSV, diffing the new bids against the previous
-run: how many bids changed, moved into/out of positive, the biggest movers, and any submissions added or
-dropped. The baseline is the newest run stamped earlier than this one — or, with a fixed `-o`, the file
-at that path that this run replaces, read before it's overwritten. The first run just notes there's
-nothing to compare against.
-
----
-
-## Files
-
-| File | Role |
-|---|---|
-| `make_topic_interests.py` | Creates a blank `topic_interests.csv` (every topic at 0) from the preferences CSV. Stdlib. |
-| `score_bids.py` | Scores submissions by similarity to your papers (+ interests) and fills the bids. Needs `scikit-learn` + `pypdf` (`PyYAML` optional). |
-| `config.yaml` | Scoring parameters (`bid_max`, `interest_weight`, `sem_gain`). Edit to taste. |
-| `topic_interests.csv` | **you edit** — `topic,interest` on a **-2..2** scale. Made by `make_topic_interests.py`; each run reports unrated tags and unparsable values. |
-| `papers_pdf/` | your papers as PDFs (**≥5 unique, with a text layer**) — matched semantically against each submission. |
-| `reviewer-expertise-profile.<ts>.json` | *(generated — don't hand-edit)* your topic interests + top TF-IDF terms of your papers, for inspection. Timestamped per run. |
-| `revprefs.csv` | the round's submissions (HotCRP export: `paper, title, preference[, abstract, topics]`). Deleted once scored, unless `--keep-original`. |
-| `revprefs.scored.<ts>.csv` | the scored output — **abstracts removed** — this is what you upload back to HotCRP. Timestamped per run. |
-| `revprefs.scored.<ts>.changes.txt` | *(generated)* what changed vs. the previous run's bids (movers, added/dropped submissions). |
-
-(CSV files and `papers_pdf/` are git-ignored — they hold conference-confidential data.)
-
----
-
-## Requirements
-
-- Python 3.7+
-- `scikit-learn` — for the TF-IDF similarity: `pip install scikit-learn`
-- `pypdf` — to read your PDFs: `pip install pypdf` (your PDFs need a text layer — scans are skipped)
-- `PyYAML` — optional; `score_bids.py` reads `config.yaml` with a built-in fallback parser if it isn't installed.
-- `torch` + `transformers` + `adapters` — **only** if you use `--method specter2` (neural embeddings): `pip install torch transformers adapters`.
-- `sentence-transformers` — **only** if you use `--method rerank` (local cross-encoder reranker): `pip install sentence-transformers`.
-
----
-
-## How it works
+`score_bids.py` builds your profile on the fly — the topic interests differ every conference, so
+there's nothing reusable to build separately — and saves a summary to
+`reviewer-expertise-profile.<ts>.json` for inspection.
 
 ### Building your profile
 
@@ -172,16 +232,30 @@ the conference's **submissions**, and your papers are projected into that same s
 - a term must appear in **≥2 submissions** but **< 30%** of them — dropping both rare noise and generic
   words — with term frequency scaled sub-linearly (a word used 10× isn't 10× as important).
 
-A PDF only contributes if text can be extracted from it. Scanned, image-only, and encrypted
-files yield nothing, so each one is **named on stderr and skipped**, and the run **stops** if
-fewer than 5 papers with usable text remain — without them the bids would be scored on your
-topic interests alone. OCR such a paper, or re-export it with a text layer, to include it.
+A PDF only contributes if text can be extracted from it. Scanned, image-only, and encrypted files
+yield nothing, so each one is **named on stderr and skipped**, and the run **stops** if fewer than 5
+papers with usable text remain — without them the bids would be scored on your topic interests alone.
+OCR such a paper, or re-export it with a text layer, to include it.
 
-Fitting the vocabulary on the submission pool means anything specific to *your* papers but absent from the
-conference — your name, affiliation, venue boilerplate — simply never enters. So your "profile" isn't a
-hand-written keyword list; it's *your actual papers as vectors*, in the conference's own vocabulary.
-`reviewer-expertise-profile.json` saves the top-weighted terms so you can see what it picked up — this
-summary is always TF-IDF-based, even when matching with `--method specter2` (below).
+Fitting the vocabulary on the submission pool means anything specific to *your* papers but absent from
+the conference — your name, affiliation, venue boilerplate — simply never enters. So your "profile"
+isn't a hand-written keyword list; it's *your actual papers as vectors*, in the conference's own
+vocabulary. The profile JSON saves the top-weighted terms so you can see what it picked up — this
+summary is always TF-IDF-based, whichever `--method` you matched with.
+
+### Checking your topic interests
+
+Topics are matched by exact name, so `score_bids.py` checks `topic_interests.csv` every run and reports
+on stderr:
+
+- any `interest` that isn't a plain integer in −2..2, with the value it was read as (a word reads as
+  `0`, an out-of-range number is clamped);
+- topic tags on the submissions with **no row** in your file — they score neutral, which is what you'd
+  see if the conference added or renamed a topic after you built it, or a name got mistyped;
+- rows in your file that match **no submission** this round, e.g. left over from a previous conference.
+
+None of these stop the run — a conference can legitimately carry topics you never rated — but a tag you
+meant to rate showing up as unrated is worth knowing before you upload.
 
 ### Scoring a submission
 
@@ -190,7 +264,7 @@ Parameters live in `config.yaml`.
 1. **Semantic similarity.** The submission's title+abstract is vectorized in the same space, and we take
    the **mean cosine similarity to your top-3 most-similar papers** — so a submission that strongly
    matches *any one* of your sub-areas still scores high, but a single fluke neighbor (or one shared rare
-   bigram) can't spike it on its own.
+   bigram) can't spike it on its own. This is the only step `--method` changes.
 2. **Normalize.** Cosine similarities are small, bunched, and skewed (TF-IDF piles near zero; SPECTER2
    sits high even for unrelated papers), so each submission is **rank/quantile-transformed** across the
    pool onto a ±`ref_max` range — "where does this rank among your matches this year." `sem_gain` shapes
@@ -203,41 +277,23 @@ Parameters live in `config.yaml`.
    `[-bid_max, bid_max]`, so that many end up positive **and** your strongest matches still reach
    ±`bid_max`.
 
-**Method choice (step 1).** By default the similarity is **TF-IDF** cosine (above). Pass
-`--method specter2` to instead use **AllenAI SPECTER2** neural embeddings — a model trained for
-paper-to-paper similarity that matches on *meaning*, so it catches related work phrased differently
-(needs `torch`/`transformers`/`adapters` and a one-time model download; slower on CPU). For SPECTER2
-both sides are embedded as `title [SEP] abstract`, the form the model was trained on — your papers are
-parsed down to their own title+abstract (falling back to the raw page text only when none parses)
-rather than fed the three-page read. Only step 1 changes — the normalize/blend/map steps and the
-TF-IDF top-terms summary are identical either way.
-
-Pass `--method rerank` for a **retrieve-then-rerank** pipeline: the TF-IDF pass first shortlists the
-**top-N** submissions (`--rerank-topn`; default **auto-scales** as `max(150, 3 × --positive-frac ×
-#submissions)` so the shortlist always covers the positive bid band, since reranked candidates sort
-above the rest), then a **local cross-encoder** rescores only those. Unlike TF-IDF/SPECTER2, which embed each text on its own and compare vectors, a cross-encoder
-reads each *(your paper, submission)* pair **together** and judges their relevance directly — more
-precise, but too slow to run on the whole pool, hence the shortlist. Each candidate is scored against
-your papers and aggregated with a top-3 mean; the default model is `BAAI/bge-reranker-v2-m3`
-(multilingual, long-abstract-friendly; override with `--rerank-model`). The shortlisted candidates are
-ranked by the cross-encoder and sit **above** the non-shortlisted submissions (which keep their TF-IDF
-order), then the usual normalize/blend/map steps run unchanged. Needs `pip install
-sentence-transformers` and a one-time model download; runs offline and deterministically afterwards
-(slower on CPU).
-
 The only judgment input is `topic_interests.csv`; everything else is mechanical and in `config.yaml`.
 
+### Inside the matching methods
+
+**`specter2`** embeds both sides as `title [SEP] abstract`, the form the model was trained on — your
+papers are parsed down to their own title+abstract, falling back to the raw page text only when no
+abstract parses, rather than being fed the three-page read.
+
+**`rerank`** shortlists the top-N submissions by TF-IDF, then scores each candidate against your papers
+with the cross-encoder and aggregates with a top-3 mean. The shortlist size auto-scales as
+`max(150, 3 × --positive-frac × pool size)`, so it always covers the positive bid band — reranked
+candidates sort above the rest, so a positive bid could otherwise land on a paper the cross-encoder
+never saw. TF-IDF cosines and cross-encoder logits aren't comparable, so they're never compared: each
+group is rank-transformed within itself and the reranked candidates are placed as a band strictly above
+the non-candidates, which keep their TF-IDF order. The normalize/blend/map steps then run unchanged.
+
 ---
-
-## Customizing
-
-- **Re-rate a topic** → edit its `interest` in `topic_interests.csv`, then re-run `score_bids.py`.
-- **Target how many papers you bid positively on** → `--positive-frac F` (0–1). **Defaults to `0.1`** (~10%); set e.g. `--positive-frac 0.3` for ~30%. It puts the threshold just below the target count and rescales each side to the full range, so that many end up positive **and** your strongest papers still reach ±`bid_max` (the run reports the achieved fraction; ties at the threshold are the one thing that can hold it below target, and it warns if the miss exceeds 10 points).
-- **Drop weak bids to neutral** → `--zero-below N` sets every bid strictly below `N` to `0`. E.g. `--zero-below 5` keeps only bids ≥ +5 and zeroes everything else (negatives included), so you only surface papers you actively want. Applied after `--positive-frac`, and reported separately: the run states the fraction `--positive-frac` achieved on its own terms, then how many bids were zeroed and how many positives remain. `N` may not exceed `bid_max`, since nothing would survive it.
-- **Balance similarity vs. your interests** → `interest_weight` in `config.yaml` (0 = pure paper-similarity, 1 = pure topic interests; default 0.35). `sem_gain` shapes the rank curve (9 = linear; higher = more
-separation between near-miss and on-target papers).
-- **Use neural embeddings instead of TF-IDF** → `--method specter2` (AllenAI SPECTER2). Catches related work phrased differently (semantic, not just shared wording), but needs `pip install torch transformers adapters` and a one-time model download. Default `tfidf` is light and offline; the rest of the pipeline (interest blend, `--positive-frac`) is identical either way. Embeddings are cached in `.specter2_cache.npz` (keyed by abstract text), so re-runs only embed new/changed papers — a fully-cached re-run doesn't even load the model (override the path with `--emb-cache`).
-- **Change the output range** → set `bid_max` in `config.yaml` (default 20, max 100). The scorer runs on a fixed ±`ref_max` (20) reference span and *linearly rescales* the final bid to ±`bid_max`. (`bid_max` is an integer in `[1, bid_limit]`; `bid_limit` defaults to HotCRP's 100.)
 
 ## Reproducibility
 
