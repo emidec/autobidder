@@ -21,7 +21,7 @@ HOW A BID IS COMPUTED (parameters in config.yaml)
     topic_base = 0.6*max + 0.4*mean of your interests (x10) for the submission's topic tags
     value      = (1 - interest_weight)*sem + interest_weight*topic_base       (in [-ref_max, ref_max])
     bid        = value mapped to [-bid_max, bid_max] so ~--positive-frac of papers are positive
-                 (threshold at that quantile, each side rescaled to the full range)
+                 (threshold just below that many papers, each side rescaled to the full range)
 
 By default the abstract-laden input is deleted and an abstract-free scored CSV is written;
 --keep-original keeps it. At least 5 unique PDFs in papers_pdf/ are required.
@@ -606,13 +606,20 @@ def _auto_rerank_topn(n_submissions, positive_frac):
 
 def bids_for_positive_fraction(values, target):
     """Map continuous reference scores to final bids so ~`target` of papers are positive,
-    putting the threshold at the target quantile and rescaling EACH SIDE to the full output
-    range, so the strongest paper reaches +bid_max and the weakest -bid_max."""
+    putting the threshold just below the target count and rescaling EACH SIDE to the full
+    output range, so the strongest paper reaches +bid_max and the weakest -bid_max.
+
+    The threshold is derived from the number of papers that should end up positive rather than
+    from its complement: a bid counts as positive only when it is STRICTLY above tau, so tau has
+    to sit one slot below the target band or the paper at the cut is excluded and the run lands
+    one short. (target=1 still tops out at (n-1)/n -- some paper has to be the lowest.)
+    """
     n = len(values)
     if n == 0:
         return []
     sv = sorted(values)
-    idx = min(max(int(round((1.0 - target) * n)), 0), n - 1)
+    k = int(round(target * n))                        # papers that should end up positive
+    idx = min(max(n - k - 1, 0), n - 1)               # tau sits just below them
     tau = sv[idx]
     hi = (sv[-1] - tau) or 1.0
     lo = (tau - sv[0]) or 1.0

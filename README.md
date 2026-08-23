@@ -197,8 +197,8 @@ Parameters live in `config.yaml`.
 3. **Blend with interests.** `(1 − interest_weight)·similarity + interest_weight·topic`, where `topic` is
    `0.6·max + 0.4·mean` of your −2..2 interests (×10) for the submission's topic tags. Default
    `interest_weight` 0.35 — similarity leads, your topic ratings steer.
-4. **Map to bids.** Threshold at the `--positive-frac` quantile and rescale each side to
-   `[-bid_max, bid_max]`, so ~that fraction end up positive **and** your strongest matches still reach
+4. **Map to bids.** Put the threshold just below the `--positive-frac` count and rescale each side to
+   `[-bid_max, bid_max]`, so that many end up positive **and** your strongest matches still reach
    ±`bid_max`.
 
 **Method choice (step 1).** By default the similarity is **TF-IDF** cosine (above). Pass
@@ -230,7 +230,7 @@ The only judgment input is `topic_interests.csv`; everything else is mechanical 
 ## Customizing
 
 - **Re-rate a topic** → edit its `interest` in `topic_interests.csv`, then re-run `score_bids.py`.
-- **Target how many papers you bid positively on** → `--positive-frac F` (0–1). **Defaults to `0.1`** (~10%); set e.g. `--positive-frac 0.3` for ~30%. It thresholds at the target quantile and rescales each side to the full range, so ~F end up positive **and** your strongest papers still reach ±`bid_max` (the run reports the achieved fraction, within ±10 points).
+- **Target how many papers you bid positively on** → `--positive-frac F` (0–1). **Defaults to `0.1`** (~10%); set e.g. `--positive-frac 0.3` for ~30%. It puts the threshold just below the target count and rescales each side to the full range, so that many end up positive **and** your strongest papers still reach ±`bid_max` (the run reports the achieved fraction; ties at the threshold are the one thing that can hold it below target, and it warns if the miss exceeds 10 points).
 - **Drop weak bids to neutral** → `--zero-below N` sets every bid strictly below `N` to `0`. E.g. `--zero-below 5` keeps only bids ≥ +5 and zeroes everything else (negatives included), so you only surface papers you actively want. Applied after `--positive-frac`.
 - **Balance similarity vs. your interests** → `interest_weight` in `config.yaml` (0 = pure paper-similarity, 1 = pure topic interests; default 0.35). `sem_gain` shapes the rank curve (9 = linear; higher = more
 separation between near-miss and on-target papers).
