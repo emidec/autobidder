@@ -3,10 +3,14 @@
 score_bids.py - score conference submissions by similarity to your work, and fill bids.
 
 Matching is SEMANTIC, not keyword-based. Your papers (papers_pdf/) and each submission's
-title+abstract are turned into TF-IDF vectors; every submission is scored by cosine
-similarity to your most-similar paper. Your -2..2 topic interests then steer that score
-(a blend). Finally the bids are written in [-bid_max, bid_max], targeting a chosen
-fraction of positive bids without squashing your top papers.
+title+abstract are compared, and every submission is scored by its mean similarity to your
+three most-similar papers -- so it has to match a sub-area of your work rather than one
+fluke neighbour. Your -2..2 topic interests then steer that score (a blend). Finally the
+bids are written in [-bid_max, bid_max], targeting a chosen fraction of positive bids
+without squashing your top papers.
+
+--method picks how that similarity is computed -- tfidf (default), specter2, or rerank (see
+the bottom of this docstring). Only that step differs; everything after it is identical.
 
 PIPELINE
     python3 make_topic_interests.py revprefs.csv       # 1. template (topics at 0)
@@ -14,17 +18,18 @@ PIPELINE
     python3 score_bids.py revprefs.csv                 # 2. score + fill bids (uses topic_interests.csv)
 
 HOW A BID IS COMPUTED (parameters in config.yaml)
-    sem        = mean of the top-3 cosine similarities of the submission to your papers
-                 (TF-IDF, or SPECTER2 embeddings with --method specter2), then
+    sem        = mean of the submission's top-3 similarities to your papers (by --method:
+                 TF-IDF cosine, SPECTER2 embeddings, or a cross-encoder rerank), then
                  rank/quantile-transformed across submissions and shaped by sem_gain
                  -> [-ref_max, ref_max]
-    topic_base = 0.6*max + 0.4*mean of your interests (x10) for the submission's topic tags
+    topic_base = 0.6*max + 0.4*mean of your interests (scaled to ref_max) for the
+                 submission's topic tags
     value      = (1 - interest_weight)*sem + interest_weight*topic_base       (in [-ref_max, ref_max])
     bid        = value mapped to [-bid_max, bid_max] so ~--positive-frac of papers are positive
                  (threshold just below that many papers, each side rescaled to the full range)
 
 By default the abstract-laden input is deleted and an abstract-free scored CSV is written;
---keep-original keeps it. At least 5 unique PDFs in papers_pdf/ are required.
+--keep-original keeps it. At least 5 unique PDFs with extractable text in papers_pdf/ are required.
 
 Dependencies: scikit-learn (pip install scikit-learn) and pypdf (pip install pypdf).
 PyYAML is optional (config.yaml has a built-in fallback parser).
@@ -837,7 +842,7 @@ def make_change_summary(prev_path, prev, rows, profile_path=None):
 # --------------------------------- main --------------------------------------
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        description="Score submissions by TF-IDF similarity to your papers (+ topic interests), and fill bids.")
+        description="Score submissions by similarity to your papers (+ topic interests), and fill bids.")
     ap.add_argument("input", help="preferences CSV (paper,title,preference[,abstract,topics])")
     ap.add_argument("--topic-interests", dest="topic_interests", default="topic_interests.csv",
                     help="your topic,interest CSV in [-2,2] (default: topic_interests.csv)")
