@@ -55,6 +55,12 @@ and use the page's **Download** action → *Review preferences*. The default col
 on, add those fields to the view first (the **Show** menu / column options on the search bar → enable
 *Abstract* and *Topics*), then download. Save it as `revprefs.csv`.
 
+`score_bids.py` checks the columns before it does anything else. **`paper` and `preference` are
+required** — HotCRP matches rows by `paper` on upload, so an export without it can't be uploaded
+at all. `abstract` and `topics` are optional but strongly wanted, and the run warns when either is
+absent: without `abstract` it matches on titles alone, and without `topics` your interests can't be
+applied, leaving `interest_weight` of every score as a constant 0.
+
 > ⚠️ **Heads-up:** this `revprefs.csv` contains the submissions' **abstracts**, and `score_bids.py`
 > **deletes it by default** after scoring — the uploadable output it writes has the abstracts stripped.
 > Pass `--keep-original` if you want to retain the abstract-containing CSV.

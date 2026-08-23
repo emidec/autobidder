@@ -806,14 +806,26 @@ def main(argv=None):
         reader = csv.DictReader(fh)
         fields = list(reader.fieldnames or [])
         rows = list(reader)
-    if "preference" not in fields:
-        ap.error("input must have a 'preference' column")
+    # Validate the export before anything expensive or destructive happens: the input is
+    # deleted by default, and --method rerank would otherwise pay for a whole cross-encoder
+    # pass before finding out the columns it needs aren't there.
+    missing = [c for c in ("paper", "preference") if c not in fields]
+    if missing:
+        ap.error("input must have a %s column (HotCRP matches rows by 'paper' on upload)"
+                 % " and a ".join("'%s'" % c for c in missing))
     if not rows:
         ap.error("input has no data rows")
     has_topics = "topics" in fields
     has_abstract = "abstract" in fields
     mode = "abstract+topics" if (has_abstract and has_topics) else \
            ("abstract" if has_abstract else ("topics" if has_topics else "title-only"))
+    if not has_abstract:
+        sys.stderr.write("WARNING: no 'abstract' column - matching on titles alone, which is much "
+                         "weaker. Re-export with the abstract column for a real match.\n")
+    if not has_topics:
+        sys.stderr.write("WARNING: no 'topics' column - your topic interests can't be applied, so "
+                         "%.0f%% of every score is a constant 0. Re-export with the topics "
+                         "column.\n" % (100 * INTEREST_WEIGHT))
 
     interests = read_topic_interests(args.topic_interests)          # required input
     report_topic_coverage(rows, interests)
