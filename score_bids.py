@@ -162,6 +162,17 @@ def _quantile_ranks(values):
     return q
 
 
+def _quiet_library_warnings(warnings):
+    """Silence sklearn/torch/transformers chatter without blanket-ignoring everything.
+
+    A bare filterwarnings("ignore") also hides RuntimeWarning, which is how numpy reports
+    divide-by-zero and invalid values -- i.e. exactly the warnings that would mean the scoring
+    itself has gone wrong. These three categories cover the library noise and nothing numeric.
+    """
+    for cat in (UserWarning, FutureWarning, DeprecationWarning):
+        warnings.filterwarnings("ignore", category=cat)
+
+
 # ------------------------------- PDF folder ----------------------------------
 def find_unique_pdfs(folder):
     if not os.path.isdir(folder):
@@ -199,13 +210,26 @@ def read_pdf_texts(pdf_paths, pages=3):
     except Exception:
         sys.exit("pypdf is required to read your PDFs: pip install pypdf")
     import warnings
-    warnings.filterwarnings("ignore")
-    out = []
+    out, noisy = [], []
     for fn in pdf_paths:
-        try:
-            out.append("".join((p.extract_text() or "") for p in PdfReader(fn).pages[:pages]))
-        except Exception:
-            out.append("")
+        # Scoped and RECORDED, not discarded: pypdf's complaints are the first sign of a damaged
+        # file, and the old process-wide ignore also muted every warning raised after this point.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            try:
+                out.append("".join((p.extract_text() or "") for p in PdfReader(fn).pages[:pages]))
+            except Exception as exc:
+                out.append("")
+                noisy.append((fn, "unreadable (%s)" % exc))
+                continue
+        if caught:
+            noisy.append((fn, "%d parser warning(s): %s"
+                          % (len(caught), str(caught[0].message)[:60])))
+    if noisy:
+        sys.stderr.write("NOTE: pypdf reported problems with %d of %d PDF(s):\n"
+                         % (len(noisy), len(pdf_paths)))
+        for fn, why in noisy:
+            sys.stderr.write("    %-34s %s\n" % (os.path.basename(fn)[:34], why))
     return out
 
 
@@ -411,7 +435,7 @@ def _tfidf_fit(paper_texts, sub_texts, required=True):
     except Exception:
         sys.exit("scikit-learn is required: pip install scikit-learn")
     import warnings
-    warnings.filterwarnings("ignore")
+    _quiet_library_warnings(warnings)
 
     def fail(msg):
         if required:
@@ -506,7 +530,7 @@ def _specter2_scores(paper_texts, sub_pairs, cache_path=DEFAULT_EMB_CACHE):
     import warnings
     import numpy as np
     from sklearn.metrics.pairwise import cosine_similarity
-    warnings.filterwarnings("ignore")
+    _quiet_library_warnings(warnings)
 
     # assemble 'title [SEP] abstract' for both sides; parse your papers, fall back to raw text
     pap_texts = []
@@ -587,7 +611,7 @@ def _rerank_scores(paper_texts, sub_pairs, topn=RERANK_TOPN_FLOOR, model_id=DEFA
     import warnings
     import numpy as np
     from sklearn.metrics.pairwise import cosine_similarity
-    warnings.filterwarnings("ignore")
+    _quiet_library_warnings(warnings)
 
     # ---- stage 1: TF-IDF retrieval over the whole pool (same scoring as --method tfidf) ----
     sub_texts = [(t + ". " + a) for t, a in sub_pairs]
