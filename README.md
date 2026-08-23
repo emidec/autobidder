@@ -325,6 +325,17 @@ the non-candidates, which keep their TF-IDF order. The normalize/blend/map steps
 
 Fully deterministic: same papers + same `topic_interests.csv` + same CSV → identical bids.
 
+## Development
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+Stdlib `unittest`, so there's nothing extra to install. The suite covers the scoring contract
+(`--positive-frac` hitting its target, bids spanning the full range, tie handling), the input
+validation (required columns, unparsable interests, unrated topics, PDFs without text), the
+vocabulary guards, and the change-summary baseline logic.
+
 ## Acknowledgments
 
 Built with the assistance of [Claude](https://www.anthropic.com/claude) (Anthropic).
