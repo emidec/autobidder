@@ -42,6 +42,12 @@ python3 score_bids.py revprefs.csv
 This writes `revprefs.scored.<timestamp>.csv` with the `preference` column filled in, and prints a
 histogram of the bids it chose.
 
+That command matches on shared wording (TF-IDF), which needs nothing beyond the two packages above and
+is a perfectly good default. Two more accurate methods are one flag away — `--method specter2` matches
+on *meaning*, and `--method rerank` is the most precise of the three — each at the cost of one extra
+package and a one-time model download. Only the similarity step differs, so your bids stay comparable
+across methods. See [Matching methods](#matching-methods) when you want to switch.
+
 **5. Upload that scored CSV back to HotCRP.** Done.
 
 > ⚠️ **`score_bids.py` deletes `revprefs.csv` by default.** The export contains every submission's
@@ -54,7 +60,7 @@ Variations you're most likely to want:
 python3 score_bids.py revprefs.csv --keep-original       # keep the abstract-laden input
 python3 score_bids.py revprefs.csv --positive-frac 0.3   # bid positively on ~30%, not ~10%
 python3 score_bids.py revprefs.csv --zero-below 5        # only surface bids of +5 or better
-python3 score_bids.py revprefs.csv --method rerank       # most precise matching (needs one more package)
+python3 score_bids.py revprefs.csv --method rerank       # most precise matching (see Matching methods)
 ```
 
 ---
