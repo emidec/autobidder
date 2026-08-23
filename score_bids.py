@@ -62,7 +62,6 @@ MIN_UNIQUE_PDFS = 5
 MIN_PDF_CHARS = 200         # a ~3-page extract shorter than this yielded no usable text
 DEFAULT_PROFILE = "reviewer-expertise-profile.json"
 DEFAULT_EMB_CACHE = ".specter2_cache.npz"   # on-disk cache for SPECTER2 embeddings
-INTEREST_TO_AFFINITY = 10   # map a -2..2 interest onto the -20..20 reference scale
 
 csv.field_size_limit(10 ** 7)
 
@@ -108,13 +107,20 @@ def load_config(path):
     g["INTEREST_WEIGHT"] = cfg["interest_weight"]
     g["SEM_GAIN"]        = cfg["sem_gain"]
 
+    if not (isinstance(BID_LIMIT, int) and BID_LIMIT >= 1):   # checked first: bounds bid_max
+        sys.exit("config: bid_limit must be an int >= 1, got %r" % BID_LIMIT)
     if not (isinstance(BID_MAX, int) and 1 <= BID_MAX <= BID_LIMIT):
         sys.exit("config: bid_max must be an int in [1, %d], got %r" % (BID_LIMIT, BID_MAX))
     if not (0.0 <= INTEREST_WEIGHT <= 1.0):
         sys.exit("config: interest_weight must be in [0, 1], got %r" % INTEREST_WEIGHT)
+    if not (isinstance(_REF_MAX, (int, float)) and _REF_MAX > 0):
+        sys.exit("config: ref_max must be a positive number, got %r" % _REF_MAX)
     g["BID_MIN"]  = -BID_MAX
     g["_REF_MIN"] = -_REF_MAX
-    g["SCALE"]    = BID_MAX / float(_REF_MAX)
+    # A -2..2 interest maps onto the same reference span the similarity signal uses, so the two
+    # sides of the blend stay in proportion whatever ref_max is. Hardcoding this let an edited
+    # ref_max move one side and not the other, silently reweighting papers against interests.
+    g["INTEREST_TO_AFFINITY"] = _REF_MAX / 2.0
 
 
 # ------------------------------- helpers -------------------------------------

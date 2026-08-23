@@ -137,7 +137,7 @@ Nothing else needs rebuilding.
 | `sem_gain` | `9.0` | Shapes the rank curve. `9` is linear; higher pushes mid-rank papers toward the extremes, i.e. more separation between near-miss and on-target. |
 | `bid_max` | `20` | The output range: bids are written in `[-bid_max, bid_max]`. An integer in `[1, bid_limit]`. |
 | `bid_limit` | `100` | Validation ceiling for `bid_max` — HotCRP's own maximum. |
-| `ref_max` | `20` | Internal reference span the score is computed on, before it's mapped to `[-bid_max, bid_max]`. |
+| `ref_max` | `20` | Internal reference span the score is computed on. **Has no effect on your bids** — both halves of the blend scale with it and the final mapping depends only on ordering. Set `bid_max` instead. |
 
 ---
 

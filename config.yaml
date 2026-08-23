@@ -9,7 +9,10 @@ bid_max: 20
 bid_limit: 100          # validation ceiling (HotCRP allows up to |100|)
 
 # ---- SCORING ----------------------------------------------------------------
-ref_max: 20             # internal reference span the score is computed on (leave as-is)
+# Internal reference span the score is computed on. It has NO effect on your bids: both
+# halves of the blend scale with it, and the final mapping to [-bid_max, bid_max] depends
+# only on the ordering, so any positive value gives identical output. Set bid_max, not this.
+ref_max: 20
 
 # How much your -2..2 topic interests steer the bid vs. semantic similarity to your
 # own papers. 0 = ignore interests (pure semantic), 1 = ignore papers (pure interests).
