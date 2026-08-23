@@ -59,6 +59,7 @@ CONFIG_KEYS = ("bid_max", "bid_limit", "ref_max", "interest_weight", "sem_gain")
 DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
 DEFAULT_PDF_DIR = "papers_pdf"
 MIN_UNIQUE_PDFS = 5
+MIN_PDF_CHARS = 200         # a ~3-page extract shorter than this yielded no usable text
 DEFAULT_PROFILE = "reviewer-expertise-profile.json"
 DEFAULT_EMB_CACHE = ".specter2_cache.npz"   # on-disk cache for SPECTER2 embeddings
 INTEREST_TO_AFFINITY = 10   # map a -2..2 interest onto the -20..20 reference scale
@@ -195,6 +196,34 @@ def read_pdf_texts(pdf_paths, pages=3):
         except Exception:
             out.append("")
     return out
+
+
+def usable_paper_texts(pdf_paths, folder, minimum):
+    """Read the PDFs and keep only the ones that actually yielded text.
+
+    pypdf extracts nothing from scanned, image-only, or encrypted files, and read_pdf_texts
+    turns any failure into "". Left in the corpus those become empty documents: every cosine
+    similarity against them is exactly 0, which ties the pool in the rank transform and
+    flattens the semantic half of the score to nothing -- the bids would come entirely from
+    topic_interests.csv, and the profile's top terms would be an argsort of an all-zero
+    vector (plausible-looking, but meaningless). So name the unreadable ones, drop them, and
+    hold their contents to the same minimum the files themselves must meet.
+    """
+    texts = read_pdf_texts(pdf_paths)
+    good, bad = [], []
+    for fn, txt in zip(pdf_paths, texts):
+        (good if len(txt.strip()) >= MIN_PDF_CHARS else bad).append((fn, txt))
+    if bad:
+        sys.stderr.write("WARNING: %d of %d PDF(s) yielded no usable text (scanned, image-only "
+                         "or encrypted?) and were skipped:\n" % (len(bad), len(pdf_paths)))
+        for fn, txt in bad:
+            sys.stderr.write("    %-50s %d chars\n" % (os.path.basename(fn)[:50], len(txt.strip())))
+        sys.stderr.write("  OCR them or re-export them with a text layer to include them.\n")
+    if len(good) < minimum:
+        sys.exit("ERROR: only %d of %d PDF(s) in '%s' contain extractable text; at least %d "
+                 "required.\nWithout them the bids would be scored on your topic interests "
+                 "alone." % (len(good), len(pdf_paths), folder, minimum))
+    return [fn for fn, _ in good], [txt for _, txt in good]
 
 
 # ------------------------------ topic interests ------------------------------
@@ -737,10 +766,11 @@ def main(argv=None):
            ("abstract" if has_abstract else ("topics" if has_topics else "title-only"))
 
     interests = read_topic_interests(args.topic_interests)          # required input
-    pdfs = require_pdfs(args.pdfs, MIN_UNIQUE_PDFS)                  # >=5 enforced
+    pdfs = require_pdfs(args.pdfs, MIN_UNIQUE_PDFS)                  # >=5 unique files
 
     # ---- semantic similarity: your papers vs each submission ----
-    paper_texts = read_pdf_texts(pdfs)
+    # narrows pdfs to the ones with real text, so meta.unique_pdfs counts what was used
+    pdfs, paper_texts = usable_paper_texts(pdfs, args.pdfs, MIN_UNIQUE_PDFS)
     sub_pairs = [((r.get("title") or ""), (r.get("abstract") or "")) for r in rows]
     rerank_topn = (args.rerank_topn if args.rerank_topn is not None
                    else _auto_rerank_topn(len(rows), args.positive_frac))

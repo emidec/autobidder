@@ -91,8 +91,9 @@ python3 score_bids.py revprefs.csv --positive-frac 0.3           # bid positivel
 ```
 
 This uses `topic_interests.csv` (override with `--topic-interests`) and your papers in `papers_pdf/`
-(**at least 5 unique PDFs, or it stops**). It scores each submission by **TF-IDF cosine similarity to
-your most-similar papers** (the top few), blends that with your topic interests, writes
+(**at least 5 unique PDFs with extractable text, or it stops**). It scores each submission by
+**TF-IDF cosine similarity to your most-similar papers** (the top few), blends that with your
+topic interests, writes
 `reviewer-expertise-profile.json`, and fills the `preference` column — targeting a positive bid on ~10%
 of papers (`--positive-frac`, default 0.1). **By default it deletes the original input and keeps only the
 scored output, with the `abstract` column stripped** (`paper, title, preference, topics`) — pass
@@ -116,7 +117,7 @@ submissions added or dropped. The first run just notes there's nothing to compar
 | `score_bids.py` | Scores submissions by similarity to your papers (+ interests) and fills the bids. Needs `scikit-learn` + `pypdf` (`PyYAML` optional). |
 | `config.yaml` | Scoring parameters (`bid_max`, `interest_weight`, `sem_gain`). Edit to taste. |
 | `topic_interests.csv` | **you edit** — `topic,interest` on a **-2..2** scale. Made by `make_topic_interests.py`. |
-| `papers_pdf/` | your papers as PDFs (**≥5 unique**) — matched semantically against each submission. |
+| `papers_pdf/` | your papers as PDFs (**≥5 unique, with a text layer**) — matched semantically against each submission. |
 | `reviewer-expertise-profile.<ts>.json` | *(generated — don't hand-edit)* your topic interests + top TF-IDF terms of your papers, for inspection. Timestamped per run. |
 | `revprefs.csv` | the round's submissions (HotCRP export: `paper, title, preference[, abstract, topics]`). Deleted once scored, unless `--keep-original`. |
 | `revprefs.scored.<ts>.csv` | the scored output — **abstracts removed** — this is what you upload back to HotCRP. Timestamped per run. |
@@ -130,7 +131,7 @@ submissions added or dropped. The first run just notes there's nothing to compar
 
 - Python 3.7+
 - `scikit-learn` — for the TF-IDF similarity: `pip install scikit-learn`
-- `pypdf` — to read your PDFs: `pip install pypdf`
+- `pypdf` — to read your PDFs: `pip install pypdf` (your PDFs need a text layer — scans are skipped)
 - `PyYAML` — optional; `score_bids.py` reads `config.yaml` with a built-in fallback parser if it isn't installed.
 - `torch` + `transformers` + `adapters` — **only** if you use `--method specter2` (neural embeddings): `pip install torch transformers adapters`.
 - `sentence-transformers` — **only** if you use `--method rerank` (local cross-encoder reranker): `pip install sentence-transformers`.
@@ -150,6 +151,11 @@ the conference's **submissions**, and your papers are projected into that same s
 - English stop-words plus PDF boilerplate (*et al*, *figure*, *arxiv*, …) are dropped;
 - a term must appear in **≥2 submissions** but **< 30%** of them — dropping both rare noise and generic
   words — with term frequency scaled sub-linearly (a word used 10× isn't 10× as important).
+
+A PDF only contributes if text can be extracted from it. Scanned, image-only, and encrypted
+files yield nothing, so each one is **named on stderr and skipped**, and the run **stops** if
+fewer than 5 papers with usable text remain — without them the bids would be scored on your
+topic interests alone. OCR such a paper, or re-export it with a text layer, to include it.
 
 Fitting the vocabulary on the submission pool means anything specific to *your* papers but absent from the
 conference — your name, affiliation, venue boilerplate — simply never enters. So your "profile" isn't a
