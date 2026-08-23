@@ -803,6 +803,9 @@ def main(argv=None):
     if args.rerank_topn is not None and args.rerank_topn < 1:
         ap.error("--rerank-topn must be a positive integer")
     load_config(args.config)
+    if args.zero_below is not None and args.zero_below > BID_MAX:
+        ap.error("--zero-below %d exceeds bid_max (%d) - every bid would be zeroed"
+                 % (args.zero_below, BID_MAX))
 
     # one timestamp per run, stamped into every default output name so repeated runs
     # never clobber earlier results (and so the change summary can find the prior run).
@@ -866,6 +869,16 @@ def main(argv=None):
     values = [clamp((1 - iw) * sem_signal[i] + iw * topic_base[i], _REF_MIN, _REF_MAX)
               for i in range(len(rows))]
     prefs = bids_for_positive_fraction(values, args.positive_frac)
+
+    # Judge the mapping on its own output: --zero-below is a deliberate choice applied after it,
+    # so counting its zeros against the target would report a miss the mapping never made.
+    achieved = sum(1 for p in prefs if p > 0) / len(prefs)
+    target_note = "target positive: %.0f%%  ->  achieved: %.0f%%" % (
+        100 * args.positive_frac, 100 * achieved)
+    if abs(achieved - args.positive_frac) > 0.10:
+        sys.stderr.write("WARNING: " + target_note + "  - more than 10 points off "
+                         "(distribution too lumpy).\n")
+
     zeroed_below = 0
     if args.zero_below is not None:                       # floor sub-threshold bids to neutral
         capped = []
@@ -878,12 +891,6 @@ def main(argv=None):
         prefs = capped
     for r, p in zip(rows, prefs):
         r["preference"] = str(p)
-    achieved = sum(1 for p in prefs if p > 0) / len(prefs)
-    target_note = "target positive: %.0f%%  ->  achieved: %.0f%%" % (
-        100 * args.positive_frac, 100 * achieved)
-    if abs(achieved - args.positive_frac) > 0.10:
-        sys.stderr.write("WARNING: " + target_note + "  - more than 10 points off "
-                         "(distribution too lumpy).\n")
 
     # ---- save the profile summary (for inspection; never hand-edited) ----
     profile = collections.OrderedDict()
@@ -947,7 +954,8 @@ def main(argv=None):
         print(target_note)
         tail = "\nwrote %d bids -> %s  (profile: %s)" % (len(rows), out_path, profile_path)
         if args.zero_below is not None:
-            tail += "\nzeroed %d bids below %+d (--zero-below)" % (zeroed_below, args.zero_below)
+            tail += "\nzeroed %d bids below %+d (--zero-below); %d positive bid(s) remain" % (
+                zeroed_below, args.zero_below, sum(1 for p in prefs if p > 0))
         tail += "\nchange summary -> %s%s" % (
             changes_path, "" if prev_output else "  (first run in this series)")
         if removed_original:
