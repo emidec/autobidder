@@ -4,7 +4,7 @@ Fill in your HotCRP reviewer bids automatically. Rate the conference's topics on
 your own papers, and it scores every submission by how well it matches your work. Everything runs
 locally — no submission data leaves your machine.
 
-**Status:** beta — `v0.3.0-beta`.
+**Status:** beta — `v0.3.5-beta`.
 
 ---
 
@@ -112,11 +112,12 @@ the other columns are ignored.
 | `--zero-below N` | — | Floor every bid below `N` to `0` (neutral). See below. |
 | `--keep-original` | off | Don't delete the input CSV after scoring. |
 | `--method M` | `tfidf` | Similarity method: `tfidf`, `specter2`, or `rerank`. See [Matching methods](#matching-methods). |
-| `-o PATH` | timestamped | Output CSV path. |
+| `-o`, `--output PATH` | timestamped | Output CSV path. |
 | `--report PATH` | — | Also write the histogram report to a file. |
 | `--quiet` | off | Don't print the report. |
 | `--topic-interests PATH` | `topic_interests.csv` | Where your topic ratings live. |
 | `--pdfs DIR` | `papers_pdf` | Folder of your paper PDFs. |
+| `--config PATH` | `config.yaml` | Scoring parameters file (defaults to the one beside the script). |
 | `--profile-out PATH` | timestamped | Where to save the profile summary JSON. |
 | `--rerank-topn N` | auto | `rerank` only: how many TF-IDF candidates the cross-encoder rescores. |
 | `--rerank-model ID` | `BAAI/bge-reranker-v2-m3` | `rerank` only: cross-encoder model id. |
