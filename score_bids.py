@@ -682,23 +682,47 @@ def _load_bids(path):
     return out
 
 
+_RUN_TS_RE = r"\d{8}-\d{6}"
+
+
 def _find_previous_output(out_path, run_ts):
-    """The most recent EARLIER scored CSV in the same series: the same output name with a
-    different run timestamp. We build the glob by swapping this run's timestamp for '*', so a
-    custom -o that doesn't contain the timestamp has no series and returns None."""
+    """The most recent EARLIER scored CSV to diff the new bids against.
+
+    Default output names carry this run's timestamp, so the series is every name matching it with
+    some other stamp; we take the latest stamp strictly before run_ts. Ordering on the stamp is
+    what makes it the previous RUN -- %Y%m%d-%H%M%S sorts correctly as text, whereas mtime is
+    perturbed by any copy, sync, or editor save and would silently pick the wrong baseline.
+
+    A custom -o carries no stamp and so has no series, but a file already sitting at that exact
+    path is the run we are about to replace -- which makes it the right baseline, provided the
+    caller reads it before writing.
+    """
     base = os.path.basename(out_path)
     if run_ts not in base:
+        return out_path if os.path.isfile(out_path) else None
+    dirn = os.path.dirname(out_path) or "."
+    head, _, tail = base.partition(run_ts)
+    pat = re.compile("^%s(%s)%s$" % (re.escape(head), _RUN_TS_RE, re.escape(tail)))
+    best = None
+    try:
+        names = os.listdir(dirn)
+    except OSError:
         return None
-    pattern = os.path.join(os.path.dirname(out_path) or ".", base.replace(run_ts, "*"))
-    here = os.path.abspath(out_path)
-    cands = [p for p in glob.glob(pattern)
-             if os.path.isfile(p) and os.path.abspath(p) != here]
-    return max(cands, key=os.path.getmtime) if cands else None
+    for name in names:
+        m = pat.match(name)
+        if not m or m.group(1) >= run_ts:                 # only runs before this one
+            continue
+        path = os.path.join(dirn, name)
+        if os.path.isfile(path) and (best is None or m.group(1) > best[0]):
+            best = (m.group(1), path)
+    return best[1] if best else None
 
 
-def make_change_summary(prev_path, rows):
-    """Human-readable diff of the current bids vs the previous run's scored CSV, keyed on
-    the `paper` id. Always returns text (notes 'first run' when there's nothing to compare)."""
+def make_change_summary(prev_path, prev, rows):
+    """Human-readable diff of the current bids vs the previous run's scored CSV, keyed on the
+    `paper` id. Takes the previous bids already read, because with a fixed -o the baseline file
+    is the one this run overwrites. Always returns text (notes 'first run' when there's nothing
+    to compare)."""
     new = {}
     for r in rows:
         key = (r.get("paper") or "").strip()
@@ -716,7 +740,6 @@ def make_change_summary(prev_path, rows):
                   "No previous output to compare against."]
         return "\n".join(lines)
 
-    prev = _load_bids(prev_path)
     common = [k for k in new if k in prev]
     added = [k for k in new if k not in prev]
     removed = [k for k in prev if k not in new]
@@ -921,8 +944,14 @@ def main(argv=None):
         stem, ext = os.path.splitext(args.input)
         out_path = "%s.scored.%s%s" % (stem, run_ts, ext or ".csv")   # timestamped default
 
-    # find the previous run in this series BEFORE writing the new file
+    # Find AND READ the previous run before writing: with a fixed -o the baseline is the very
+    # file this run replaces, so reading it afterwards would diff the new bids against themselves.
     prev_output = _find_previous_output(out_path, run_ts)
+    prev_bids = _load_bids(prev_output) if prev_output else {}
+    if prev_output and not prev_bids:
+        sys.stderr.write("WARNING: no bids could be read from %s; skipping the change "
+                         "comparison.\n" % prev_output)
+        prev_output = None
 
     # write WITHOUT the abstract column
     out_fields = [f for f in fields if f != "abstract"]
@@ -934,7 +963,7 @@ def main(argv=None):
     # ---- change summary vs the previous most-recent output ----
     changes_path = os.path.splitext(out_path)[0] + ".changes.txt"
     with open(changes_path, "w", encoding="utf-8") as fh:
-        fh.write(make_change_summary(prev_output, rows) + "\n")
+        fh.write(make_change_summary(prev_output, prev_bids, rows) + "\n")
 
     # delete the original (abstract-laden) input unless asked to keep it
     removed_original = False

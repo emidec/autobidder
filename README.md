@@ -122,8 +122,10 @@ Every run stamps its outputs with a timestamp — `revprefs.scored.<YYYYMMDD-HHM
 (Pass an explicit `-o`/`--profile-out` to choose fixed names instead.)
 
 Each run also writes a `…changes.txt` next to the scored CSV, diffing the new bids against the previous
-run in the same series: how many bids changed, moved into/out of positive, the biggest movers, and any
-submissions added or dropped. The first run just notes there's nothing to compare against.
+run: how many bids changed, moved into/out of positive, the biggest movers, and any submissions added or
+dropped. The baseline is the newest run stamped earlier than this one — or, with a fixed `-o`, the file
+at that path that this run replaces, read before it's overwritten. The first run just notes there's
+nothing to compare against.
 
 ---
 
