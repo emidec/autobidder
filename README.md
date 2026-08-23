@@ -181,13 +181,14 @@ your target so the shortlist always covers the positive bid band; override the m
 | `revprefs.csv` | the round's submissions (HotCRP export). Deleted once scored, unless `--keep-original`. |
 | `revprefs.scored.<ts>.csv` | the scored output — **abstracts removed** — this is what you upload back to HotCRP. |
 | `revprefs.scored.<ts>.changes.txt` | *(generated)* what changed vs. the previous run's bids (movers, added/dropped submissions). |
-| `reviewer-expertise-profile.<ts>.json` | *(generated — don't hand-edit)* your topic interests + top TF-IDF terms of your papers, for inspection. |
+| `reviewer-expertise-profile.<ts>.json` | *(generated — don't hand-edit)* the run's settings (method, targets, `bid_max`, which papers were used) plus your topic interests and the top TF-IDF terms of your papers. |
 
 Every run stamps its outputs with a timestamp, so repeated runs never overwrite earlier results. Pass
 an explicit `-o` / `--profile-out` to choose fixed names instead.
 
 The `…changes.txt` diffs the new bids against the previous run: how many changed, moved into or out of
-positive, the biggest movers, and any submissions added or dropped. The baseline is the newest run
+positive, the biggest movers, and any submissions added or dropped. It names the profile JSON for its
+own run, so when bids move you can compare the two runs' settings to see why. The baseline is the newest run
 stamped earlier than this one — or, with a fixed `-o`, the file at that path that this run replaces,
 read before it's overwritten. The first run just notes there's nothing to compare against.
 
