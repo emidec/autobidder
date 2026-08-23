@@ -363,7 +363,10 @@ SPECTER2_SEP = "[SEP]"   # BERT-based SPECTER2's sep_token; the model is trained
 DEFAULT_RERANK_MODEL = "BAAI/bge-reranker-v2-m3"   # multilingual cross-encoder; handles long abstracts
 RERANK_TOPN_FLOOR = 150          # minimum cross-encoder shortlist, even for small pools
 RERANK_TOPN_CUSHION = 3          # auto shortlist = this x the expected positive band (see _auto_rerank_topn)
-RERANK_MAX_LENGTH = 512          # over-long (paper, submission) pairs are truncated
+# Joint token budget for a (your paper, submission) pair. The model accepts 8192, so this is a
+# speed choice: at ~1.7 tokens per word, 1024 leaves ~300 words per side, which clears any
+# realistic abstract, while cost grows faster than length (1024 costs ~3x 512; 2048 ~20x).
+RERANK_MAX_LENGTH = 1024
 
 
 def _topk_mean(sim, k=3):
@@ -552,7 +555,8 @@ def _specter2_scores(paper_texts, sub_pairs, cache_path=DEFAULT_EMB_CACHE):
     return best, (corpus_top_terms(vec, P) if vec is not None else [])
 
 
-def _rerank_scores(paper_texts, sub_pairs, topn=RERANK_TOPN_FLOOR, model_id=DEFAULT_RERANK_MODEL):
+def _rerank_scores(paper_texts, sub_pairs, topn=RERANK_TOPN_FLOOR, model_id=DEFAULT_RERANK_MODEL,
+                   max_length=RERANK_MAX_LENGTH):
     """--method rerank: TF-IDF retrieval + a local cross-encoder reranker (retrieve-then-rerank).
 
     The cheap TF-IDF pass ranks every submission; only the top-N candidates are then rescored by
@@ -588,7 +592,12 @@ def _rerank_scores(paper_texts, sub_pairs, topn=RERANK_TOPN_FLOOR, model_id=DEFA
     k = max(1, min(topn, n))
     cand = sorted(range(n), key=lambda i: tfidf_best[i], reverse=True)[:k]   # top-N candidate indices
     cand_set = set(cand)
-    sys.stderr.write("rerank: cross-encoding the top %d of %d submissions\n" % (k, n))
+    # Announce the real work: every candidate is scored against every paper, so the job is
+    # k x papers pairs, not k. And k auto-scales with --positive-frac, which is a flag people
+    # change for unrelated reasons -- so the cost has to be visible before the model loads.
+    sys.stderr.write("rerank: %d candidate(s) of %d submissions x %d paper(s) = %d "
+                     "cross-encoder pair(s), max_length %d\n"
+                     % (k, n, len(paper_texts), k * len(paper_texts), max_length))
     sys.stderr.flush()
 
     # ---- stage 2: cross-encoder rerank of the candidates only ----
@@ -598,7 +607,7 @@ def _rerank_scores(paper_texts, sub_pairs, topn=RERANK_TOPN_FLOOR, model_id=DEFA
         pap_texts.append((pt + ". " + pa) if pa else " ".join(raw.split()))
     sys.stderr.write("Loading reranker (%s)...\n" % model_id)
     sys.stderr.flush()
-    ce = CrossEncoder(model_id, max_length=RERANK_MAX_LENGTH)
+    ce = CrossEncoder(model_id, max_length=max_length)
     ce.model.eval()                                                         # deterministic forward pass
     pairs = [(pap_texts[p], sub_texts[i]) for i in cand for p in range(len(pap_texts))]
     logits = ce.predict(pairs, batch_size=32, convert_to_numpy=True,
@@ -617,7 +626,8 @@ def _rerank_scores(paper_texts, sub_pairs, topn=RERANK_TOPN_FLOOR, model_id=DEFA
 
 
 def semantic_scores(paper_texts, sub_pairs, method="tfidf", cache_path=DEFAULT_EMB_CACHE,
-                    rerank_topn=RERANK_TOPN_FLOOR, rerank_model=DEFAULT_RERANK_MODEL):
+                    rerank_topn=RERANK_TOPN_FLOOR, rerank_model=DEFAULT_RERANK_MODEL,
+                    rerank_max_length=RERANK_MAX_LENGTH):
     """Per-submission similarity to your most-similar papers (top-k), by the chosen method.
 
     paper_texts: raw leading PDF text per paper. sub_pairs: (title, abstract) per submission.
@@ -625,7 +635,8 @@ def semantic_scores(paper_texts, sub_pairs, method="tfidf", cache_path=DEFAULT_E
     if method == "specter2":
         return _specter2_scores(paper_texts, sub_pairs, cache_path=cache_path)
     if method == "rerank":
-        return _rerank_scores(paper_texts, sub_pairs, topn=rerank_topn, model_id=rerank_model)
+        return _rerank_scores(paper_texts, sub_pairs, topn=rerank_topn, model_id=rerank_model,
+                              max_length=rerank_max_length)
     return _tfidf_scores(paper_texts, sub_pairs)
 
 
@@ -848,6 +859,11 @@ def main(argv=None):
                          % (RERANK_TOPN_FLOOR, RERANK_TOPN_CUSHION))
     ap.add_argument("--rerank-model", dest="rerank_model", default=DEFAULT_RERANK_MODEL,
                     help="--method rerank: cross-encoder model id (default: %s)" % DEFAULT_RERANK_MODEL)
+    ap.add_argument("--rerank-max-length", dest="rerank_max_length", type=int,
+                    default=RERANK_MAX_LENGTH, metavar="N",
+                    help="--method rerank: joint token budget per (paper, submission) pair "
+                         "(default: %d). Raising it keeps long abstracts intact but costs more "
+                         "than proportionally more time." % RERANK_MAX_LENGTH)
     ap.add_argument("--profile-out", dest="profile_out", default=None,
                     help="where to save the profile summary JSON (default: %s with a run "
                          "timestamp inserted, so re-runs don't overwrite)" % DEFAULT_PROFILE)
@@ -874,6 +890,8 @@ def main(argv=None):
         ap.error("--positive-frac must be a float between 0 and 1")
     if args.rerank_topn is not None and args.rerank_topn < 1:
         ap.error("--rerank-topn must be a positive integer")
+    if args.rerank_max_length < 16:
+        ap.error("--rerank-max-length must be at least 16 tokens")
     load_config(args.config)
     if args.zero_below is not None and args.zero_below > BID_MAX:
         ap.error("--zero-below %d exceeds bid_max (%d) - every bid would be zeroed"
@@ -920,7 +938,8 @@ def main(argv=None):
     rerank_topn = (args.rerank_topn if args.rerank_topn is not None
                    else _auto_rerank_topn(len(rows), args.positive_frac))
     sem, top_terms = semantic_scores(paper_texts, sub_pairs, args.method, cache_path=args.emb_cache,
-                                     rerank_topn=rerank_topn, rerank_model=args.rerank_model)
+                                     rerank_topn=rerank_topn, rerank_model=args.rerank_model,
+                                     rerank_max_length=args.rerank_max_length)
     # Rank/quantile-transform similarity onto the fixed reference scale: robust to TF-IDF's
     # right-skew and SPECTER2's anisotropy, and -- unlike a z-score -- independent of this
     # year's similarity spread, so the blend with topic_base stays stable across venues.

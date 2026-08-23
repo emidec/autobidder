@@ -113,6 +113,7 @@ the other columns are ignored.
 | `--profile-out PATH` | timestamped | Where to save the profile summary JSON. |
 | `--rerank-topn N` | auto | `rerank` only: how many TF-IDF candidates the cross-encoder rescores. |
 | `--rerank-model ID` | `BAAI/bge-reranker-v2-m3` | `rerank` only: cross-encoder model id. |
+| `--rerank-max-length N` | `1024` | `rerank` only: joint token budget per (paper, submission) pair. |
 | `--emb-cache PATH` | `.specter2_cache.npz` | `specter2` only: embedding cache file. |
 
 **`--positive-frac F`** — how many papers you want to end up wanting. It puts the threshold just below
@@ -166,6 +167,13 @@ relevance directly, rather than embedding each text alone and comparing vectors 
 slow for a whole pool, hence the shortlist. `--rerank-topn` defaults to auto-scaling with the pool and
 your target so the shortlist always covers the positive bid band; override the model with
 `--rerank-model`.
+
+Each candidate is scored against **every** one of your papers, so the real work is
+`candidates × papers` pairs — the run prints that number before loading the model, since
+`--rerank-topn` scales with `--positive-frac` and the cost can grow via a flag you changed for another
+reason. Each pair gets a joint budget of `--rerank-max-length` tokens (default **1024**, roughly 300
+words per side, enough for any realistic abstract). The model accepts up to 8192, but cost grows faster
+than length — 2048 runs several times slower for headroom no abstract uses.
 
 ---
 
