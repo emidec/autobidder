@@ -28,19 +28,25 @@ columns ([click-path](#the-hotcrp-round-trip)).
 python3 make_topic_interests.py revprefs.csv
 ```
 
-**4.** Score every submission and fill in your bids:
+**4.** Score every submission and fill in your bids. `--method` chooses how submissions are matched
+against your papers — only that step differs, so bids stay comparable across methods:
 
 ```bash
-python3 score_bids.py revprefs.csv
+python3 score_bids.py revprefs.csv                    # tfidf (default): shared wording, nothing to install
+python3 score_bids.py revprefs.csv --method specter2  # meaning, not just wording  (+ torch transformers adapters)
+python3 score_bids.py revprefs.csv --method rerank    # most precise, reads pairs   (+ sentence-transformers)
 ```
+
+`specter2` and `rerank` download their model once, then run offline — see
+[Matching methods](#matching-methods) for what each one does.
 
 **5.** Upload the `revprefs.scored.<timestamp>.csv` it wrote back to HotCRP. Done.
 
 > ⚠️ Step 4 **deletes `revprefs.csv`** — it holds every submission's abstract, and the scored output
 > has them stripped so the confidential copy doesn't linger. Pass `--keep-original` to keep it.
 
-By default this bids positively on ~10% of papers and matches on shared wording. To change either, see
-[Options](#options) and [Matching methods](#matching-methods).
+By default this bids positively on ~10% of papers; `--positive-frac` and the rest of the flags are in
+[Options](#options).
 
 ---
 
