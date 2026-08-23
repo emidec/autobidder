@@ -2,9 +2,9 @@
 """
 make_topic_interests.py - create a blank topic_interests.csv from a preferences CSV.
 
-Reads the conference's topic list (the `topics` column - column E - of the HotCRP
-reviewer-preferences export) and writes topic_interests.csv with every distinct topic
-defaulted to 0 (neutral), for you to fill in.
+Reads the conference's topic list (the `topics` column of the HotCRP reviewer-preferences
+export) and writes topic_interests.csv with every distinct topic defaulted to 0 (neutral),
+for you to fill in.
 
 Please indicate your interest in reviewing papers on these conference topics, on a
 -2..2 scale:
@@ -40,7 +40,7 @@ SCALE_HEADER = [
 
 
 def topics_from_csv(path):
-    """Distinct, sorted topics from the 'topics' column (column E), ';'-separated."""
+    """Distinct, sorted topics from the 'topics' column, ';'-separated."""
     with open(path, newline="", encoding="utf-8", errors="replace") as fh:
         reader = csv.reader(fh)
         header = next(reader, None)
@@ -48,10 +48,12 @@ def topics_from_csv(path):
             sys.exit("ERROR: %s is empty." % path)
         idx = next((i for i, h in enumerate(header) if h.strip().lower() == "topics"), None)
         if idx is None:
-            if len(header) >= 5:
-                idx = 4  # column E
-            else:
-                sys.exit("ERROR: no 'topics' column (column E) found in %s." % path)
+            # No positional guess: column 5 is only 'topics' by convention, and when it is
+            # 'abstract' instead, splitting it on ';' yields sentence fragments written out as
+            # topics to rate. score_bids.py requires the real header too.
+            sys.exit("ERROR: no 'topics' column in %s.\nFound: %s\nRe-export from HotCRP with "
+                     "the Topics column enabled (Show menu -> Topics)."
+                     % (path, ", ".join(h.strip() for h in header) or "(no columns)"))
         topics = set()
         for row in reader:
             if idx < len(row):
@@ -65,7 +67,7 @@ def topics_from_csv(path):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Create a blank topic_interests.csv (every topic at 0) from a preferences CSV.")
-    ap.add_argument("csv", help="preferences CSV (reads the 'topics' column / column E)")
+    ap.add_argument("csv", help="preferences CSV (reads the 'topics' column)")
     ap.add_argument("-o", "--output", default="topic_interests.csv",
                     help="output file (default: topic_interests.csv)")
     ap.add_argument("--force", action="store_true",
