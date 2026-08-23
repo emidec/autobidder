@@ -81,6 +81,18 @@ Open `topic_interests.csv` and set each topic's `interest`. **Scale: an integer 
 `2` = very high, `1` = high, `0` = neutral, `-1` = low, `-2` = very low. (The scale is also printed at
 the top of the file.) Leave anything you don't care about at `0`.
 
+Topics are matched by exact name, so `score_bids.py` checks this file every run and reports on
+stderr:
+
+- any `interest` that isn't a plain integer in −2..2, with the value it was read as (a word reads
+  as `0`, an out-of-range number is clamped);
+- topic tags on the submissions with **no row here** — they score neutral, which is what you'd
+  see if the conference added or renamed a topic after you built the file, or a name got mistyped;
+- rows here that match **no submission** this round, e.g. left over from a previous conference.
+
+None of these stop the run — a conference can legitimately carry topics you never rated — but a
+tag you meant to rate showing up as unrated is worth knowing before you upload.
+
 ### 2. Build the profile + fill the bids (one command)
 
 ```bash
@@ -116,7 +128,7 @@ submissions added or dropped. The first run just notes there's nothing to compar
 | `make_topic_interests.py` | Creates a blank `topic_interests.csv` (every topic at 0) from the preferences CSV. Stdlib. |
 | `score_bids.py` | Scores submissions by similarity to your papers (+ interests) and fills the bids. Needs `scikit-learn` + `pypdf` (`PyYAML` optional). |
 | `config.yaml` | Scoring parameters (`bid_max`, `interest_weight`, `sem_gain`). Edit to taste. |
-| `topic_interests.csv` | **you edit** — `topic,interest` on a **-2..2** scale. Made by `make_topic_interests.py`. |
+| `topic_interests.csv` | **you edit** — `topic,interest` on a **-2..2** scale. Made by `make_topic_interests.py`; each run reports unrated tags and unparsable values. |
 | `papers_pdf/` | your papers as PDFs (**≥5 unique, with a text layer**) — matched semantically against each submission. |
 | `reviewer-expertise-profile.<ts>.json` | *(generated — don't hand-edit)* your topic interests + top TF-IDF terms of your papers, for inspection. Timestamped per run. |
 | `revprefs.csv` | the round's submissions (HotCRP export: `paper, title, preference[, abstract, topics]`). Deleted once scored, unless `--keep-original`. |

@@ -228,7 +228,12 @@ def usable_paper_texts(pdf_paths, folder, minimum):
 
 # ------------------------------ topic interests ------------------------------
 def read_topic_interests(path):
-    """topic,interest CSV; interest is an integer in [-2, 2] (out-of-range clamped)."""
+    """topic,interest CSV; interest is an integer in [-2, 2].
+
+    This file is the only judgment input in the tool, so anything that isn't a plain integer in
+    range is reported rather than quietly coerced: a word reads as 0 and an out-of-range number
+    is clamped, either of which would silently discard a rating you meant to give.
+    """
     if not os.path.exists(path):
         sys.exit("ERROR: topic interests file not found: '%s'\n"
                  "Create one with:  python3 make_topic_interests.py revprefs.csv" % path)
@@ -239,19 +244,64 @@ def read_topic_interests(path):
         sys.exit("ERROR: '%s' must have columns: topic,interest "
                  "(make one with: python3 make_topic_interests.py revprefs.csv)" % path)
     out = collections.OrderedDict()
+    bad = []
     for r in rows:
         t = (r.get("topic") or "").strip()
         if not t:
             continue
         v = (r.get("interest") or "").strip()
         try:
-            iv = int(round(float(v))) if v else 0
+            raw, note = (float(v) if v else 0.0), None
         except ValueError:
-            iv = 0
-        out[t] = max(-2, min(2, iv))
+            raw, note = 0.0, "not a number"
+        iv = max(-2, min(2, int(round(raw))))
+        if note is None and v and raw != iv:
+            note = "not an integer in -2..2"
+        if note:
+            bad.append((t, v, note, iv))
+        out[t] = iv
+    if bad:
+        sys.stderr.write("WARNING: %d row(s) in %s don't hold an integer in -2..2:\n"
+                         % (len(bad), path))
+        for t, v, note, iv in bad:
+            sys.stderr.write("    %-45s %-10s %s; read as %+d\n"
+                             % (t[:45], repr(v), note, iv))
+        sys.stderr.write("  Fix them and re-run, or accept the values shown.\n")
     if not out:
         sys.exit("ERROR: no topics found in %s." % path)
     return out
+
+
+def report_topic_coverage(rows, interests):
+    """Report topic tags the interests file doesn't cover, and rows that cover nothing.
+
+    Tags are matched by exact string, so a topic the conference added or renamed after you built
+    the file scores neutral with nothing to show it -- as does a hand-edited typo. Both directions
+    are worth seeing, and neither is fatal: a conference may legitimately carry a topic you never
+    rated. Silent when the export has no topics column at all.
+    """
+    tags = collections.Counter()
+    for r in rows:
+        for t in (r.get("topics") or "").split(";"):
+            t = t.strip()
+            if t:
+                tags[t] += 1
+    if not tags:
+        return
+    unrated = sorted(t for t in tags if t not in interests)
+    unused = sorted(t for t in interests if t not in tags)
+    if unrated:
+        sys.stderr.write("WARNING: %d topic tag(s) on the submissions have no row in your "
+                         "interests file and score neutral:\n" % len(unrated))
+        for t in unrated[:20]:
+            sys.stderr.write("    %-58s (%d submission(s))\n" % (t[:58], tags[t]))
+        if len(unrated) > 20:
+            sys.stderr.write("    ... and %d more\n" % (len(unrated) - 20))
+        sys.stderr.write("  Re-run make_topic_interests.py to pick up new or renamed topics.\n")
+    if unused:
+        shown = ", ".join(unused[:5]) + (", ..." if len(unused) > 5 else "")
+        sys.stderr.write("NOTE: %d topic(s) in your interests file match no submission this "
+                         "round: %s\n" % (len(unused), shown))
 
 
 # --------------------------- semantic similarity -----------------------------
@@ -766,6 +816,7 @@ def main(argv=None):
            ("abstract" if has_abstract else ("topics" if has_topics else "title-only"))
 
     interests = read_topic_interests(args.topic_interests)          # required input
+    report_topic_coverage(rows, interests)
     pdfs = require_pdfs(args.pdfs, MIN_UNIQUE_PDFS)                  # >=5 unique files
 
     # ---- semantic similarity: your papers vs each submission ----
