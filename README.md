@@ -16,59 +16,31 @@ pip install scikit-learn pypdf
 
 Then, once per reviewing round:
 
-**1. Put your papers in `papers_pdf/`.** At least 5 PDFs, each with a real text layer — scans and
-image-only files are skipped, and the run stops if fewer than 5 usable ones remain. Submissions get
-matched against these.
+**1.** Put at least 5 of your own papers in `papers_pdf/`, as text-based PDFs — scans don't work.
 
-**2. Export the submissions from HotCRP** as `revprefs.csv`, with the `abstract` and `topics` columns
-included. See [The HotCRP round trip](#the-hotcrp-round-trip) for the click-path.
+**2.** Export the submissions from HotCRP as `revprefs.csv`, including the `abstract` and `topics`
+columns ([click-path](#the-hotcrp-round-trip)).
 
-**3. Rate the conference's topics:**
+**3.** Generate the topic list, then set each topic's `interest` in `topic_interests.csv` —
+`+2` want, `+1` happy to, `0` neutral, `-1` rather not, `-2` avoid. The only judgment call in the tool:
 
 ```bash
 python3 make_topic_interests.py revprefs.csv
 ```
 
-Open `topic_interests.csv` and set each topic's `interest` to an integer from **−2 to +2** — `2` = very
-high, `1` = high, `0` = neutral, `-1` = low, `-2` = very low. Leave anything you don't care about at
-`0`. This is the only judgment call in the whole tool.
-
-**4. Score the submissions and fill your bids:**
+**4.** Score every submission and fill in your bids:
 
 ```bash
 python3 score_bids.py revprefs.csv
 ```
 
-This writes `revprefs.scored.<timestamp>.csv` with the `preference` column filled in, and prints a
-histogram of the bids it chose.
+**5.** Upload the `revprefs.scored.<timestamp>.csv` it wrote back to HotCRP. Done.
 
-**5. Upload that scored CSV back to HotCRP.** Done.
+> ⚠️ Step 4 **deletes `revprefs.csv`** — it holds every submission's abstract, and the scored output
+> has them stripped so the confidential copy doesn't linger. Pass `--keep-original` to keep it.
 
-> ⚠️ **`score_bids.py` deletes `revprefs.csv` by default.** The export contains every submission's
-> abstract; the scored output has them stripped, so the confidential copy doesn't linger on disk. Pass
-> `--keep-original` to keep it — useful if you want to re-run with different settings.
-
-#### Pick a matching method (optional)
-
-Step 4 used `tfidf`, the default, which needs nothing beyond the two packages you already
-installed. Two more accurate options are one flag away:
-
-| | Matches on | Cost |
-|---|---|---|
-| `--method tfidf` *(default)* | shared wording | none — already installed |
-| `--method specter2` | **meaning**, so it catches related work phrased differently | `pip install torch transformers adapters` + one-time download |
-| `--method rerank` | **meaning, read pairwise** — the most precise | `pip install sentence-transformers` + one-time download |
-
-Only the similarity step changes, so you can switch between rounds and the bids stay comparable.
-Details in [Matching methods](#matching-methods).
-
-Variations you're most likely to want:
-
-```bash
-python3 score_bids.py revprefs.csv --keep-original       # keep the abstract-laden input
-python3 score_bids.py revprefs.csv --positive-frac 0.3   # bid positively on ~30%, not ~10%
-python3 score_bids.py revprefs.csv --zero-below 5        # only surface bids of +5 or better
-```
+By default this bids positively on ~10% of papers and matches on shared wording. To change either, see
+[Options](#options) and [Matching methods](#matching-methods).
 
 ---
 
