@@ -8,7 +8,7 @@ locally — no submission data leaves your machine.
 
 ---
 
-## How to use autobiddexr
+## How to use autobidder
 
 ```bash
 pip install scikit-learn pypdf
