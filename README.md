@@ -135,11 +135,11 @@ how that similarity is computed. Everything downstream (the interest blend, `--p
 report) is identical, so you can switch freely between rounds or re-run with `--keep-original` and
 compare.
 
-| `--method` | Needs | Model passes | Good for |
+| `--method` | Needs | Speed | Good for |
 |---|---|---|---|
-| **`tfidf`** *(default)* | nothing extra | **none** | Shared vocabulary. Light, fully offline, no model download. |
-| **`specter2`** | `pip install torch transformers adapters` | **`n + P`** | Meaning rather than wording — catches related work phrased differently. |
-| **`rerank`** *(beta)* | `pip install sentence-transformers` | **`R · n · P`** | The most precise. TF-IDF shortlists, then a cross-encoder rescores the shortlist. |
+| **`tfidf`** *(default)* | nothing extra | fast | Shared vocabulary. Light, fully offline, no model download. |
+| **`specter2`** | `pip install torch transformers adapters` | slower | Meaning rather than wording — catches related work phrased differently. |
+| **`rerank`** *(beta)* | `pip install sentence-transformers` | slowest | The most precise. TF-IDF shortlists, then a cross-encoder rescores the shortlist. |
 
 ### Performance
 
@@ -159,8 +159,8 @@ reading both texts in one pass, which forces one pass per *pair*, so your inputs
 Three consequences:
 
 - **Adding a PDF is free for `specter2` and linear for `rerank`.** One more paper is one more embedding
-  versus one more pass over the entire shortlist. Going from 13 papers to 20 leaves `specter2`
-  unchanged and makes `rerank` 54% slower.
+  versus one more pass over the entire shortlist. Going from 10 papers to 20 leaves `specter2`
+  essentially unchanged and doubles `rerank`.
 - **`--positive-frac` is a cost knob for `rerank` only**, because `R` defaults to tracking it. Raising
   your bid target raises the shortlist, and the shortlist multiplies by `P`.
 - **Re-runs are nearly free for `specter2`** — embeddings are cached by text, so a second run with
@@ -171,16 +171,17 @@ to `--rerank-max-length` tokens, while SPECTER2 is a ~110M-parameter model readi
 Attention is quadratic in length, so a rerank pass costs an order of magnitude more than a SPECTER2 one
 on top of there being more of them.
 
-On a 1,442-submission round with 13 PDFs at the default `--positive-frac 0.1`:
+A round of **1,000 submissions** with **10 papers**, at the default `--positive-frac 0.1` (so
+`R = 0.2`):
 
-| | forward passes | measured on an M-series Mac |
-|---|---|---|
-| `tfidf` | 0 | seconds |
-| `specter2` | 1,455 | about a minute, then cached |
-| `rerank` | 3,757 | **~1.5 hours** |
+| | forward passes | | on an M-series Mac |
+|---|---|---|---|
+| `tfidf` | 0 | | seconds |
+| `specter2` | `1000 + 10` | = 1,010 | about a minute, then cached |
+| `rerank` | `0.2 × 1000 × 10` | = 2,000 | **about 45 minutes** |
 
-2.6× the passes, ~80× the wall time — that gap is the per-pass cost, not the count. If your round is
-this size, `rerank` is an overnight job and `specter2` is a coffee break.
+Twice the passes, but roughly forty times the wall time — that gap is per-pass cost, not count. At this
+scale `rerank` is something you start and walk away from, while `specter2` is a coffee break.
 
 `specter2` and `rerank` each download their model once, then run offline and deterministically. That
 first download happens *inside* a scoring run, which can leave it apparently doing nothing for several
