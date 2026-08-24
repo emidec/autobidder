@@ -109,11 +109,11 @@ def load_config(path):
         hint = ("\n  sem_gain has been renamed to sem_spread, where 1.0 -- not 9.0 -- means "
                 "'no shaping'.\n  Replace it with:  sem_spread: %g" % conv)
     if missing:
-        sys.exit("config: %s is missing key(s): %s%s"
-                 % (path, ", ".join(sorted(missing)), hint))
+        sys.exit("config: %s is missing %s: %s%s"
+                 % (path, plural(len(missing), "key"), ", ".join(sorted(missing)), hint))
     if unknown:
-        sys.exit("config: unknown key(s) in %s: %s%s"
-                 % (path, ", ".join(sorted(unknown)), hint))
+        sys.exit("config: %s has %s: %s%s"
+                 % (path, plural(len(unknown), "unknown key"), ", ".join(sorted(unknown)), hint))
 
     g = globals()
     g["BID_MAX"]         = cfg["bid_max"]
@@ -142,6 +142,11 @@ def load_config(path):
 
 
 # ------------------------------- helpers -------------------------------------
+def plural(n, word, suffix="s"):
+    """'1 paper' / '10 papers' -- so counted messages don't read as '10 paper(s)'."""
+    return "%d %s%s" % (n, word, "" if n == 1 else suffix)
+
+
 def clamp(x, lo, hi):
     return max(lo, min(hi, x))
 
@@ -212,8 +217,8 @@ def require_pdfs(folder, minimum):
         sys.exit("ERROR: PDF folder not found: '%s' (put at least %d of your papers in it)."
                  % (folder, minimum))
     if len(pdfs) < minimum:
-        sys.exit("ERROR: '%s' has %d unique PDF(s); at least %d required "
-                 "(dupes/non-PDFs don't count)." % (folder, len(pdfs), minimum))
+        sys.exit("ERROR: '%s' has %s; at least %d required "
+                 "(dupes/non-PDFs don't count)." % (folder, plural(len(pdfs), "unique PDF"), minimum))
     return pdfs
 
 
@@ -236,11 +241,11 @@ def read_pdf_texts(pdf_paths, pages=3):
                 noisy.append((fn, "unreadable (%s)" % exc))
                 continue
         if caught:
-            noisy.append((fn, "%d parser warning(s): %s"
-                          % (len(caught), str(caught[0].message)[:60])))
+            noisy.append((fn, "%s: %s"
+                          % (plural(len(caught), "parser warning"), str(caught[0].message)[:60])))
     if noisy:
-        sys.stderr.write("NOTE: pypdf reported problems with %d of %d PDF(s):\n"
-                         % (len(noisy), len(pdf_paths)))
+        sys.stderr.write("NOTE: pypdf reported problems with %d of %s:\n"
+                         % (len(noisy), plural(len(pdf_paths), "PDF")))
         for fn, why in noisy:
             sys.stderr.write("    %-34s %s\n" % (os.path.basename(fn)[:34], why))
     return out
@@ -262,15 +267,16 @@ def usable_paper_texts(pdf_paths, folder, minimum):
     for fn, txt in zip(pdf_paths, texts):
         (good if len(txt.strip()) >= MIN_PDF_CHARS else bad).append((fn, txt))
     if bad:
-        sys.stderr.write("WARNING: %d of %d PDF(s) yielded no usable text (scanned, image-only "
-                         "or encrypted?) and were skipped:\n" % (len(bad), len(pdf_paths)))
+        sys.stderr.write("WARNING: %d of %s yielded no usable text (scanned, image-only "
+                         "or encrypted?) and were skipped:\n"
+                         % (len(bad), plural(len(pdf_paths), "PDF")))
         for fn, txt in bad:
             sys.stderr.write("    %-50s %d chars\n" % (os.path.basename(fn)[:50], len(txt.strip())))
         sys.stderr.write("  OCR them or re-export them with a text layer to include them.\n")
     if len(good) < minimum:
-        sys.exit("ERROR: only %d of %d PDF(s) in '%s' contain extractable text; at least %d "
+        sys.exit("ERROR: only %d of %s in '%s' contain extractable text; at least %d "
                  "required.\nWithout them the bids would be scored on your topic interests "
-                 "alone." % (len(good), len(pdf_paths), folder, minimum))
+                 "alone." % (len(good), plural(len(pdf_paths), "PDF"), folder, minimum))
     return [fn for fn, _ in good], [txt for _, txt in good]
 
 
@@ -309,8 +315,8 @@ def read_topic_interests(path):
             bad.append((t, v, note, iv))
         out[t] = iv
     if bad:
-        sys.stderr.write("WARNING: %d row(s) in %s don't hold an integer in -2..2:\n"
-                         % (len(bad), path))
+        sys.stderr.write("WARNING: %s in %s don't hold an integer in -2..2:\n"
+                         % (plural(len(bad), "row"), path))
         for t, v, note, iv in bad:
             sys.stderr.write("    %-45s %-10s %s; read as %+d\n"
                              % (t[:45], repr(v), note, iv))
@@ -339,17 +345,17 @@ def report_topic_coverage(rows, interests):
     unrated = sorted(t for t in tags if t not in interests)
     unused = sorted(t for t in interests if t not in tags)
     if unrated:
-        sys.stderr.write("WARNING: %d topic tag(s) on the submissions have no row in your "
-                         "interests file and score neutral:\n" % len(unrated))
+        sys.stderr.write("WARNING: %s on the submissions with no row in your interests "
+                         "file, scored neutral:\n" % plural(len(unrated), "topic tag"))
         for t in unrated[:20]:
-            sys.stderr.write("    %-58s (%d submission(s))\n" % (t[:58], tags[t]))
+            sys.stderr.write("    %-58s (%s)\n" % (t[:58], plural(tags[t], "submission")))
         if len(unrated) > 20:
             sys.stderr.write("    ... and %d more\n" % (len(unrated) - 20))
         sys.stderr.write("  Re-run make_topic_interests.py to pick up new or renamed topics.\n")
     if unused:
         shown = ", ".join(unused[:5]) + (", ..." if len(unused) > 5 else "")
-        sys.stderr.write("NOTE: %d topic(s) in your interests file match no submission this "
-                         "round: %s\n" % (len(unused), shown))
+        sys.stderr.write("NOTE: %s in your interests file with no matching submission this "
+                         "round: %s\n" % (plural(len(unused), "topic"), shown))
 
 
 # --------------------------- semantic similarity -----------------------------
@@ -459,11 +465,11 @@ def _tfidf_fit(paper_texts, sub_texts, required=True):
 
     n = len(sub_texts)
     if n < TFIDF_MIN_SUBMISSIONS:
-        fail("%d submission(s) is too few to build a vocabulary from: a term has to appear in at "
+        fail("%s is not enough to build a vocabulary from: a term has to appear in at "
              "least %d of them but in fewer than %.0f%%, and no term can do both below %d "
              "submissions.\nThis tool is built for a full reviewing round -- with a pool this "
              "small, bid by hand."
-             % (n, TFIDF_MIN_DF, 100 * TFIDF_MAX_DF, TFIDF_MIN_SUBMISSIONS))
+             % (plural(n, "submission"), TFIDF_MIN_DF, 100 * TFIDF_MAX_DF, TFIDF_MIN_SUBMISSIONS))
         return None, None, None
 
     stop = list(ENGLISH_STOP_WORDS.union(_EXTRA_STOP))
@@ -638,9 +644,9 @@ def _rerank_scores(paper_texts, sub_pairs, topn, model_id=DEFAULT_RERANK_MODEL,
     # Announce the real work: every candidate is scored against every paper, so the job is
     # k x papers pairs, not k. And k auto-scales with --positive-frac, which is a flag people
     # change for unrelated reasons -- so the cost has to be visible before the model loads.
-    sys.stderr.write("rerank: %d candidate(s) of %d submissions x %d paper(s) = %d "
-                     "cross-encoder pair(s), max_length %d\n"
-                     % (k, n, len(paper_texts), k * len(paper_texts), max_length))
+    sys.stderr.write("rerank: %d of %s x %s = %s, max_length %d\n"
+                     % (k, plural(n, "submission"), plural(len(paper_texts), "paper"),
+                        plural(k * len(paper_texts), "cross-encoder pair"), max_length))
     sys.stderr.flush()
 
     # ---- stage 2: cross-encoder rerank of the candidates only ----

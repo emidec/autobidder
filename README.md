@@ -193,7 +193,7 @@ This means:
 - **Adding a PDF is free for `specter2` and linear for `rerank`.** One more paper is one more embedding
   versus one more pass over the entire shortlist. Going from 10 papers to 20 leaves `specter2`
   essentially unchanged and doubles `rerank`.
-- **`--positive-frac` is a cost knob for `rerank` only**, because `R` defaults to tracking it. Raising
+- **`--positive-frac` could also a cost knob, though for `rerank` only**, because `R` defaults to tracking it. Raising
   your bid target raises the shortlist, and the shortlist multiplies by `P`.
 - **Re-runs are nearly free for `specter2`** — embeddings are cached by text, so a second run with
   different `--positive-frac` re-embeds nothing. `rerank` has no such cache and repeats every pair.
@@ -255,7 +255,7 @@ so extra PDFs cost them nothing.)
 The run prints the count before loading the model:
 
 ```
-rerank: 505 candidate(s) of 1442 submissions x 13 paper(s) = 6565 cross-encoder pair(s), max_length 1024
+rerank: 200 of 1000 submissions x 10 papers = 2000 cross-encoder pairs, max_length 1024
 ```
 
 More than you want to wait for? Stop it and lower `--rerank-frac`.
