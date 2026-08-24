@@ -97,7 +97,7 @@ the other columns are ignored.
 | `--pdfs DIR` | `papers_pdf` | Folder of your paper PDFs. |
 | `--config PATH` | `config.yaml` | Scoring parameters file (defaults to the one beside the script). |
 | `--profile-out PATH` | timestamped | Where to save the profile summary JSON. |
-| `--rerank-topn N` | auto | `rerank` only: how many TF-IDF candidates the cross-encoder rescores. |
+| `--rerank-topn N` | auto | `rerank` only: how many TF-IDF candidates the cross-encoder rescores (auto = `1.5 × --positive-frac × #submissions`, floor 150, cap 40% of pool). |
 | `--rerank-model ID` | `BAAI/bge-reranker-v2-m3` | `rerank` only: cross-encoder model id. |
 | `--rerank-max-length N` | `1024` | `rerank` only: joint token budget per (paper, submission) pair. |
 | `--emb-cache PATH` | `.specter2_cache.npz` | `specter2` only: embedding cache file. |
@@ -162,9 +162,15 @@ are cached in `.specter2_cache.npz` keyed by the text they came from, so re-runs
 **`rerank`** uses TF-IDF to shortlist the top-N submissions, then has a local cross-encoder rescore
 only those. A cross-encoder reads each *(your paper, submission)* pair **together** and judges their
 relevance directly, rather than embedding each text alone and comparing vectors — more precise, but too
-slow for a whole pool, hence the shortlist. `--rerank-topn` defaults to auto-scaling with the pool and
-your target so the shortlist always covers the positive bid band; override the model with
-`--rerank-model`.
+slow for a whole pool, hence the shortlist. Override the model with `--rerank-model`.
+
+`--rerank-topn` defaults to `1.5 × --positive-frac × #submissions`, floored at 150 and **capped at 40%
+of the pool**. The floor of that range is what matters: positive bids come from the reranked band, so a
+shortlist smaller than `--positive-frac × #submissions` leaves some positive bids on submissions the
+cross-encoder never scored. The cap matters for cost — cost is `shortlist × papers`, and without it a
+wide `--positive-frac` shortlists most of the pool, which is no longer a shortlist. The run says so when
+the cap binds, and warns outright when it binds hard enough that the positive band is no longer covered
+— at which point `specter2` is the better tool.
 
 Each candidate is scored against **every** one of your papers, so the real work is
 `candidates × papers` pairs — the run prints that number before loading the model, since

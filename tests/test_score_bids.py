@@ -232,6 +232,51 @@ class VocabularyGuards(unittest.TestCase):
         self.assertIn("WARNING", err.getvalue())
 
 
+class RerankShortlist(unittest.TestCase):
+    """_auto_rerank_topn: cover the positive band without becoming the whole pool."""
+
+    def _topn(self, n, frac):
+        err, old = io.StringIO(), sys.stderr
+        sys.stderr = err
+        try:
+            return sb._auto_rerank_topn(n, frac), err.getvalue()
+        finally:
+            sys.stderr = old
+
+    def test_covers_the_positive_band_when_uncapped(self):
+        for frac in (0.02, 0.05, 0.1, 0.2):
+            topn, out = self._topn(2000, frac)
+            self.assertGreaterEqual(topn, frac * 2000,
+                                    "frac=%s: shortlist %d misses the band" % (frac, topn))
+            self.assertEqual("", out)
+
+    def test_never_exceeds_the_pool_fraction(self):
+        for frac in (0.3, 0.5, 0.9, 1.0):
+            topn, _ = self._topn(2000, frac)
+            self.assertLessEqual(topn, int(sb.RERANK_TOPN_MAX_FRAC * 2000))
+
+    def test_floor_applies_to_small_pools(self):
+        topn, _ = self._topn(200, 0.01)
+        self.assertEqual(sb.RERANK_TOPN_FLOOR, topn)
+
+    def test_notes_the_cap_while_the_band_is_still_covered(self):
+        topn, out = self._topn(1000, 0.30)          # 1.5*0.30 = 0.45 > 0.40 cap, band 0.30 < 0.40
+        self.assertIn("NOTE", out)
+        self.assertNotIn("WARNING", out)
+        self.assertGreaterEqual(topn, 0.30 * 1000)
+
+    def test_warns_when_the_band_cannot_be_covered(self):
+        topn, out = self._topn(1000, 0.60)          # band 600 > cap 400
+        self.assertIn("WARNING", out)
+        self.assertIn("never scored", out)
+        self.assertLess(topn, 0.60 * 1000)
+
+    def test_cost_scales_with_the_cushion_not_the_pool(self):
+        # the regression that prompted this: frac 0.25 used to shortlist 75% of the pool
+        topn, _ = self._topn(1442, 0.25)
+        self.assertLess(topn / 1442.0, 0.4)
+
+
 class PreviousOutputLookup(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
