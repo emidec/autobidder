@@ -8,6 +8,30 @@ locally — no submission data leaves your machine.
 
 ---
 
+## Contents
+
+- [How to use autobidder](#how-to-use-autobidder)
+- [The HotCRP round trip](#the-hotcrp-round-trip)
+- [Options](#options)
+  - [config.yaml](#configyaml)
+  - [Flags](#flags)
+- [Matching methods](#matching-methods)
+  - [Performance](#performance)
+  - [Sizing the shortlist](#sizing-the-shortlist)
+  - [What a run costs](#what-a-run-costs)
+- [Files](#files)
+- [Requirements](#requirements)
+- [How it works](#how-it-works)
+  - [Building your profile](#building-your-profile)
+  - [Checking your topic interests](#checking-your-topic-interests)
+  - [Scoring a submission](#scoring-a-submission)
+  - [Inside the matching methods](#inside-the-matching-methods)
+- [Reproducibility](#reproducibility)
+- [Development](#development)
+- [Acknowledgments](#acknowledgments)
+
+---
+
 ## How to use autobidder
 
 ```bash
@@ -25,6 +49,15 @@ On **Linux**, do this first or pip install sentence-transformer will pull 2GB+ o
 
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cpu
+```
+
+Then fetch that method's model **before** your first run — otherwise it downloads mid-scoring, which
+looks like a hang:
+
+```bash
+python3 fetch_models.py rerank          # ~2.3 GB
+python3 fetch_models.py specter2        # ~0.5 GB, plus its adapter
+python3 fetch_models.py all --check     # what's already cached? downloads nothing
 ```
 
 Then:
@@ -94,6 +127,16 @@ the other columns are ignored.
 
 ## Options
 
+### config.yaml
+
+| Key | Default | What it does |
+|---|---|---|
+| `interest_weight` | `0.35` | How much your topic ratings steer the bid vs. similarity to your papers. `0` = pure paper-similarity, `1` = pure topic interests. |
+| `sem_spread` | `1.0` | Shapes the rank curve. `1` is linear; `2` gives more separation between near-miss and on-target papers, `0.5` flattens them toward neutral. Changes how *strong* bids are, not how many are positive — that's `--positive-frac`. Range `0.1`–`10`. |
+| `bid_max` | `20` | The output range: bids are written in `[-bid_max, bid_max]`. An integer in `[1, bid_limit]`. |
+| `bid_limit` | `100` | Validation ceiling for `bid_max` — HotCRP's own maximum. |
+| `ref_max` | `20` | Internal reference span the score is computed on. **Has no effect on your bids** — both halves of the blend scale with it and the final mapping depends only on ordering. Set `bid_max` instead. |
+
 ### Flags
 
 | Flag | Default | What it does |
@@ -113,23 +156,12 @@ the other columns are ignored.
 | `--rerank-max-length N` | `1024` | `rerank` only: joint token budget per (paper, submission) pair. |
 | `--emb-cache PATH` | `.specter2_cache.npz` | `specter2` only: embedding cache file. |
 
-**`--positive-frac F`** — how many papers you want to end up wanting. It puts the threshold just below
+**Note on`--positive-frac F`:** this sets how many papers you want to end up wanting. It puts the threshold just below
 the target count and rescales each side to the full range, so that many end up positive **and** your
 strongest papers still reach ±`bid_max`. The run reports the fraction it achieved; ties at the
 threshold are the one thing that can hold it below target, and it warns if the miss exceeds 10 points.
 
-**Re-rating a topic** — edit its `interest` in `topic_interests.csv` and re-run `score_bids.py`.
-Nothing else needs rebuilding.
 
-### config.yaml
-
-| Key | Default | What it does |
-|---|---|---|
-| `interest_weight` | `0.35` | How much your topic ratings steer the bid vs. similarity to your papers. `0` = pure paper-similarity, `1` = pure topic interests. |
-| `sem_gain` | `9.0` | Shapes the rank curve. `9` is linear; higher pushes mid-rank papers toward the extremes, i.e., more separation between near-miss and on-target. |
-| `bid_max` | `20` | The output range: bids are written in `[-bid_max, bid_max]`. An integer in `[1, bid_limit]`. |
-| `bid_limit` | `100` | Validation ceiling for `bid_max` — HotCRP's own maximum. |
-| `ref_max` | `20` | Internal reference span the score is computed on. **Has no effect on your bids** — both halves of the blend scale with it and the final mapping depends only on ordering. Set `bid_max` instead. |
 
 ---
 
@@ -180,16 +212,8 @@ A round of **1,000 submissions** with **10 papers**, at the default `--positive-
 | `specter2` | `1000 + 10` | = 1,010 | about a minute, then cached |
 | `rerank` | `0.2 × 1000 × 10` | = 2,000 | **about 45 minutes** |
 
-`specter2` and `rerank` each download their model once, then run offline and deterministically. That
-first download happens *inside* a scoring run, which can leave it apparently doing nothing for several
-minutes — so fetch it separately instead:
-
-```bash
-python3 fetch_models.py rerank          # ~2.3 GB
-python3 fetch_models.py specter2        # ~0.5 GB, plus its adapter
-python3 fetch_models.py all --check     # what's already cached? downloads nothing
-```
-
+`specter2` and `rerank` each download their model once, then run offline and deterministically —
+fetch them up front with `fetch_models.py` (see [How to use autobidder](#how-to-use-autobidder)).
 Models go to the shared HuggingFace cache (`~/.cache/huggingface`, or `HF_HOME`), which is where
 `score_bids.py` looks. `--check` exits non-zero if anything is missing, so it works in a pre-flight
 script.
@@ -207,62 +231,34 @@ above the rest, which keep their TF-IDF order, and the usual normalize/blend/map
 
 ### Sizing the shortlist
 
-One setting controls this: **`--rerank-frac`**, the fraction of submissions that get cross-encoded.
+**`--rerank-frac`** — the fraction of submissions that get cross-encoded. Defaults to
+**`--positive-frac` + 0.10**, so `0.2` at the default target and `0.35` at `--positive-frac 0.25`.
 
 ```bash
 python3 score_bids.py revprefs.csv --method rerank --rerank-frac 0.2   # rescore the top 20%
 ```
 
-It defaults to **`--positive-frac` + 0.10** — ten points of headroom above whatever you're bidding on.
-So the default at `--positive-frac 0.1` is `0.2`, and at `0.25` it's `0.35`.
+- **Never below `--positive-frac`** — positive bids come from the reranked slice, so a smaller
+  shortlist would leave some of them unscored. The run stops and tells you the minimum.
+- **Above ~0.5, use `specter2` instead** — you'd be rescoring most of the pool, so the two-stage
+  saving is gone. The run says so.
 
-Two things follow from how the pipeline works:
-
-- **It can't go below `--positive-frac`.** Positive bids come from the reranked slice, so a shortlist
-  smaller than your positive target would leave some positive bids on submissions the cross-encoder
-  never scored. Set it lower and the run stops and tells you the minimum.
-- **Above ~0.5 it stops being worth it.** You're rescoring most of the pool, so the two-stage saving
-  has largely gone — `--method specter2` is the better tool at that point, and the run says so.
-
-The headroom exists so the cross-encoder can promote submissions TF-IDF ranked too low. It's ten points
-*of the pool* rather than a multiple of your target, because what it absorbs is disagreement between the
-two rankings — a property of the pool, not of how many papers you want. A multiple would misbehave at
-both ends: almost no slack at `--positive-frac 0.01`, far more than any reordering needs at `0.5`. The
-`0.10` itself is a starting value chosen on those grounds, not a measured optimum.
+The `0.10` of headroom lets the cross-encoder promote submissions TF-IDF ranked too low. It's a
+reasoned starting value, not a measured optimum.
 
 ### What a run costs
 
-Every shortlisted submission is scored against **every** one of your papers, so the work is
-`shortlist × papers` pairs — meaning **runtime is directly proportional to how many PDFs you have**.
-Adding a paper adds another full pass over the shortlist. `tfidf` and `specter2` don't work this way:
-they process each paper once and each submission once, so an extra PDF costs them nothing. Only a
-cross-encoder has to read every pair together.
+`shortlist × papers` cross-encoder pairs — so **runtime is proportional to how many PDFs you have**.
+Each extra paper is another full pass over the shortlist. (`tfidf` and `specter2` read each paper once,
+so extra PDFs cost them nothing.)
 
-The run prints the pair count before it loads the model:
+The run prints the count before loading the model:
 
 ```
 rerank: 505 candidate(s) of 1442 submissions x 13 paper(s) = 6565 cross-encoder pair(s), max_length 1024
 ```
 
-If that's more than you want to wait for, stop and lower `--rerank-frac`. Each pair gets a joint budget
-of `--rerank-max-length` tokens (default **1024**, roughly 300 words per side, enough for any realistic
-abstract); the model accepts up to 8192, but cost grows faster than length.
-
-Fetch the model first with `python3 fetch_models.py rerank`, or the first run spends its opening minutes
-downloading 2.3 GB with nothing to show.
-
-Note the `× papers`: each shortlisted submission is scored against every paper, but only its best three
-count toward the result. Skipping the rest would be cheaper, and it may be safe — but it can only ever
-*lower* a score, so it isn't done. `calibrate_rerank.py` measures on your own data what it would cost:
-
-```bash
-python3 calibrate_rerank.py revprefs.csv --sample 200
-```
-
-It cross-encodes a sample of shortlisted submissions against all your papers, then reports, for each
-pruning depth, how much of the ordering survives. If rank correlation stays ~1.0 at half your papers,
-pruning is free; if it drops, it would move your bids. Read-only — it never writes bids or touches your
-input.
+More than you want to wait for? Stop it and lower `--rerank-frac`.
 
 ---
 
@@ -273,7 +269,6 @@ input.
 | `make_topic_interests.py` | Creates a blank `topic_interests.csv` (every topic at 0) from the preferences CSV. Stdlib only. |
 | `score_bids.py` | Scores submissions by similarity to your papers (+ interests) and fills the bids. |
 | `fetch_models.py` | Pre-downloads the `specter2` / `rerank` models so a scoring run never stalls on it. |
-| `calibrate_rerank.py` | *(diagnostic)* Measures what pruning `rerank`'s paper axis would cost on your data. Read-only. |
 | `config.yaml` | Scoring parameters. Edit to taste. |
 | `topic_interests.csv` | **you edit** — `topic,interest` on a **-2..2** scale. Made by `make_topic_interests.py`; each run reports unrated tags and unparsable values. |
 | `papers_pdf/` | your papers as PDFs (**≥5 unique, with a text layer**) — matched semantically against each submission. |
@@ -297,12 +292,21 @@ read before it's overwritten. The first run just notes there's nothing to compar
 
 ## Requirements
 
-- **Python 3.7+** for the scripts themselves; in practice your `scikit-learn` build sets the floor
-  (recent versions need 3.10+).
-- `scikit-learn` and `pypdf` — required. `pip install scikit-learn pypdf`
-- `PyYAML` — optional; `score_bids.py` reads `config.yaml` with a built-in fallback parser without it.
-- Per-method extras are listed under [Matching methods](#matching-methods). Both of them install
-  `torch` — `sentence-transformers` depends on it too, even though the command doesn't say so.
+**Python 3.7+** for the scripts themselves; in practice your `scikit-learn` build sets the floor
+(recent versions need 3.10+).
+
+| Package | When | Install |
+|---|---|---|
+| `scikit-learn` | always | `pip install scikit-learn pypdf` |
+| `pypdf` | always | *(same command)* |
+| `PyYAML` | optional — `config.yaml` has a built-in fallback parser without it | `pip install PyYAML` |
+| `sentence-transformers` | `--method rerank` | `pip install sentence-transformers` |
+| `torch` | `--method rerank` and `--method specter2` | pulled in by either — see the warning below |
+| `transformers` | `--method rerank` and `--method specter2` | pulled in by `sentence-transformers`; explicit for `specter2` |
+| `adapters` | `--method specter2` | `pip install torch transformers adapters` |
+
+`sentence-transformers` pulls `torch` and `transformers` even though its command doesn't name them,
+which is how the CUDA download below catches people out.
 
 > ⚠️ **Linux: `torch` defaults to the CUDA build.** pip serves it whether or not you own an NVIDIA
 > GPU, dragging in a dozen `nvidia-*` packages totaling **2–3 GB**. To get the CPU build instead, run
@@ -328,13 +332,14 @@ read before it's overwritten. The first run just notes there's nothing to compar
         │                                                    │
         └──────────────────────────────┬─────────────────────┘
                                        ▼
-   revprefs.csv  ─────────────────►  score_bids.py  ─────────►  filled `preference` column
-                                        ▲
+   revprefs.csv  ─────────────────►  score_bids.py  ─────────►  revprefs.scored.<ts>.csv
+   (HotCRP export)                      ▲                        (upload this back to HotCRP)
                                    config.yaml
 ```
 
-`score_bids.py` builds your profile on the fly — the topic interests differ every conference, so
-there's nothing reusable to build separately — and saves a summary to
+The output is the same table as the export, with the `preference` column filled in and the `abstract`
+column stripped. `score_bids.py` builds your profile on the fly — the topic interests differ every
+conference, so there's nothing reusable to build separately — and saves a summary to
 `reviewer-expertise-profile.<ts>.json` for inspection.
 
 ### Building your profile
@@ -388,7 +393,7 @@ Parameters live in `config.yaml`.
    bigram) can't spike it on its own. This is the only step `--method` changes.
 2. **Normalize.** Cosine similarities are small, bunched, and skewed (TF-IDF piles near zero; SPECTER2
    sits high even for unrelated papers), so each submission is **rank/quantile-transformed** across the
-   pool onto a ±`ref_max` range — "where does this rank among your matches this year." `sem_gain` shapes
+   pool onto a ±`ref_max` range — "where does this rank among your matches this year." `sem_spread` shapes
    the curve (9 = linear; higher pushes mid-rank papers toward the extremes). Unlike a z-score, this
    doesn't depend on the pool's spread, so the blend in step 3 behaves the same across venues.
 3. **Blend with interests.** `(1 − interest_weight)·similarity + interest_weight·topic`, where `topic` is

@@ -20,7 +20,7 @@ PIPELINE
 HOW A BID IS COMPUTED (parameters in config.yaml)
     sem        = mean of the submission's top-3 similarities to your papers (by --method:
                  TF-IDF cosine, SPECTER2 embeddings, or a cross-encoder rerank), then
-                 rank/quantile-transformed across submissions and shaped by sem_gain
+                 rank/quantile-transformed across submissions and shaped by sem_spread
                  -> [-ref_max, ref_max]
     topic_base = 0.6*max + 0.4*mean of your interests (scaled to ref_max) for the
                  submission's topic tags
@@ -60,7 +60,8 @@ try:
 except ImportError:
     yaml = None
 
-CONFIG_KEYS = ("bid_max", "bid_limit", "ref_max", "interest_weight", "sem_gain")
+CONFIG_KEYS = ("bid_max", "bid_limit", "ref_max", "interest_weight", "sem_spread")
+SEM_GAIN_NEUTRAL = 9.0   # the old sem_gain value that meant "no shaping", for the rename hint
 DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
 DEFAULT_PDF_DIR = "papers_pdf"
 MIN_UNIQUE_PDFS = 5
@@ -100,17 +101,26 @@ def load_config(path):
         sys.exit("config: %s is empty or not a key/value mapping" % path)
     missing = set(CONFIG_KEYS) - set(cfg)
     unknown = set(cfg) - set(CONFIG_KEYS)
+    # A pre-rename config trips BOTH checks, so the hint has to be built before either exits.
+    hint = ""
+    if "sem_gain" in unknown:
+        old = cfg.get("sem_gain")
+        conv = (SEM_GAIN_NEUTRAL / old) if isinstance(old, (int, float)) and old > 0 else 1.0
+        hint = ("\n  sem_gain has been renamed to sem_spread, where 1.0 -- not 9.0 -- means "
+                "'no shaping'.\n  Replace it with:  sem_spread: %g" % conv)
     if missing:
-        sys.exit("config: %s is missing key(s): %s" % (path, ", ".join(sorted(missing))))
+        sys.exit("config: %s is missing key(s): %s%s"
+                 % (path, ", ".join(sorted(missing)), hint))
     if unknown:
-        sys.exit("config: unknown key(s) in %s: %s" % (path, ", ".join(sorted(unknown))))
+        sys.exit("config: unknown key(s) in %s: %s%s"
+                 % (path, ", ".join(sorted(unknown)), hint))
 
     g = globals()
     g["BID_MAX"]         = cfg["bid_max"]
     g["BID_LIMIT"]       = cfg["bid_limit"]
     g["_REF_MAX"]        = cfg["ref_max"]
     g["INTEREST_WEIGHT"] = cfg["interest_weight"]
-    g["SEM_GAIN"]        = cfg["sem_gain"]
+    g["SEM_SPREAD"]      = cfg["sem_spread"]
 
     if not (isinstance(BID_LIMIT, int) and BID_LIMIT >= 1):   # checked first: bounds bid_max
         sys.exit("config: bid_limit must be an int >= 1, got %r" % BID_LIMIT)
@@ -120,6 +130,9 @@ def load_config(path):
         sys.exit("config: interest_weight must be in [0, 1], got %r" % INTEREST_WEIGHT)
     if not (isinstance(_REF_MAX, (int, float)) and _REF_MAX > 0):
         sys.exit("config: ref_max must be a positive number, got %r" % _REF_MAX)
+    if not (isinstance(SEM_SPREAD, (int, float)) and 0.1 <= SEM_SPREAD <= 10.0):
+        sys.exit("config: sem_spread must be a number in [0.1, 10], got %r "
+                 "(1.0 = linear)" % SEM_SPREAD)
     g["BID_MIN"]  = -BID_MAX
     g["_REF_MIN"] = -_REF_MAX
     # A -2..2 interest maps onto the same reference span the similarity signal uses, so the two
@@ -399,17 +412,6 @@ RERANK_MAX_FRAC = 0.5            # past this the shortlist isn't one; specter2 f
 RERANK_MAX_LENGTH = 1024
 
 
-def paper_pair_texts(paper_texts):
-    """Your papers as the cross-encoder sees them: title+abstract where one parses, else the
-    raw leading page text. Shared so a calibration run feeds the model exactly what scoring does.
-    """
-    out = []
-    for raw in paper_texts:
-        pt, pa = _split_title_abstract(raw)
-        out.append((pt + ". " + pa) if pa else " ".join(raw.split()))
-    return out
-
-
 def _topk_mean(sim, k=3):
     """Per-submission similarity as the mean of its top-k paper cosines, not the single
     max: a submission must match a sub-area of your work rather than one fluke neighbor
@@ -642,7 +644,10 @@ def _rerank_scores(paper_texts, sub_pairs, topn, model_id=DEFAULT_RERANK_MODEL,
     sys.stderr.flush()
 
     # ---- stage 2: cross-encoder rerank of the candidates only ----
-    pap_texts = paper_pair_texts(paper_texts)
+    pap_texts = []
+    for raw in paper_texts:
+        pt, pa = _split_title_abstract(raw)
+        pap_texts.append((pt + ". " + pa) if pa else " ".join(raw.split()))
     sys.stderr.write("Loading reranker (%s)...\n" % model_id)
     sys.stderr.flush()
     ce = CrossEncoder(model_id, max_length=max_length)
@@ -993,8 +998,9 @@ def main(argv=None):
     # Rank/quantile-transform similarity onto the fixed reference scale: robust to TF-IDF's
     # right-skew and SPECTER2's anisotropy, and -- unlike a z-score -- independent of this
     # year's similarity spread, so the blend with topic_base stays stable across venues.
-    # sem_gain shapes the curve (9 = linear; higher pushes mid-rank papers toward the rails).
-    e = (9.0 / SEM_GAIN) if SEM_GAIN > 0 else 1.0
+    # sem_spread shapes the curve: 1 = linear, >1 pushes mid-rank papers toward the rails,
+    # <1 flattens them toward neutral. It moves bid MAGNITUDES, not how many end up positive.
+    e = 1.0 / SEM_SPREAD
     sem_signal = [clamp(_signpow(2 * q - 1, e) * _REF_MAX, _REF_MIN, _REF_MAX)
                   for q in _quantile_ranks(list(sem))]
 
@@ -1032,7 +1038,7 @@ def main(argv=None):
         "matching": ("%s similarity to your papers, blended with topic interests"
                      % matching[args.method]),
         "method": args.method,
-        "interest_weight": INTEREST_WEIGHT, "sem_gain": SEM_GAIN, "bid_max": BID_MAX,
+        "interest_weight": INTEREST_WEIGHT, "sem_spread": SEM_SPREAD, "bid_max": BID_MAX,
         "positive_frac_target": args.positive_frac,
         "positive_frac_achieved": round(achieved, 4),
         "unique_pdfs": len(pdfs), "submissions_scored": len(rows),

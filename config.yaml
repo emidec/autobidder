@@ -19,8 +19,13 @@ ref_max: 20
 interest_weight: 0.35
 
 # How sharply semantic similarity maps onto the score scale. Similarity is rank/quantile-
-# transformed across submissions onto +/-ref_max (robust, and independent of the pool's
-# spread so the blend with topic interests is stable across venues); sem_gain then shapes
-# the curve: 9 is neutral/linear, higher pushes mid-rank papers toward the rails (more
-# separation between near-miss and on-target), lower flattens it.
-sem_gain: 9.0
+# transformed across submissions onto +/-ref_max (robust, and independent of the pool's spread
+# so the blend with topic interests is stable across venues); sem_spread then shapes that curve.
+#
+#   1.0  linear -- no shaping (default)
+#   2.0  more separation between near-miss and on-target papers
+#   0.5  flatter, everything closer to neutral
+#
+# This changes how STRONG the bids are, not how many come out positive -- that is
+# --positive-frac. Allowed range 0.1 to 10.
+sem_spread: 1.0
