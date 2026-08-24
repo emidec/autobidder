@@ -175,7 +175,24 @@ the cap binds, and warns outright when it binds hard enough that the positive ba
 Each candidate is scored against **every** one of your papers, so the real work is
 `candidates × papers` pairs — the run prints that number before loading the model, since
 `--rerank-topn` scales with `--positive-frac` and the cost can grow via a flag you changed for another
-reason. Each pair gets a joint budget of `--rerank-max-length` tokens (default **1024**, roughly 300
+reason.
+
+**Sizing a run.** Start it and read the first line it prints, before the model loads:
+
+```
+rerank: 541 candidate(s) of 1442 submissions x 13 paper(s) = 7033 cross-encoder pair(s), max_length 1024
+```
+
+That pair count is the whole job. If it's larger than you want to wait for, stop and set
+`--rerank-topn` yourself — it must stay at or above `--positive-frac × #submissions`, or positive bids
+land on submissions the cross-encoder never scored. To try the method out cheaply, pin it at the floor:
+
+```bash
+python3 score_bids.py revprefs.csv --method rerank --keep-original --rerank-topn 150
+```
+
+Fetch the model first with `python3 fetch_models.py rerank`, otherwise the first run spends its opening
+minutes downloading 2.3 GB with nothing to show. Each pair gets a joint budget of `--rerank-max-length` tokens (default **1024**, roughly 300
 words per side, enough for any realistic abstract). The model accepts up to 8192, but cost grows faster
 than length — 2048 runs several times slower for headroom no abstract uses.
 
