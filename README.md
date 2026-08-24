@@ -207,6 +207,19 @@ abstract); the model accepts up to 8192, but cost grows faster than length.
 Fetch the model first with `python3 fetch_models.py rerank`, or the first run spends its opening minutes
 downloading 2.3 GB with nothing to show.
 
+Note the `× papers`: each shortlisted submission is scored against every paper, but only its best three
+count toward the result. Skipping the rest would be cheaper, and it may be safe — but it can only ever
+*lower* a score, so it isn't done. `calibrate_rerank.py` measures on your own data what it would cost:
+
+```bash
+python3 calibrate_rerank.py revprefs.csv --sample 200
+```
+
+It cross-encodes a sample of shortlisted submissions against all your papers, then reports, for each
+pruning depth, how much of the ordering survives. If rank correlation stays ~1.0 at half your papers,
+pruning is free; if it drops, it would move your bids. Read-only — it never writes bids or touches your
+input.
+
 ---
 
 ## Files
@@ -216,6 +229,7 @@ downloading 2.3 GB with nothing to show.
 | `make_topic_interests.py` | Creates a blank `topic_interests.csv` (every topic at 0) from the preferences CSV. Stdlib only. |
 | `score_bids.py` | Scores submissions by similarity to your papers (+ interests) and fills the bids. |
 | `fetch_models.py` | Pre-downloads the `specter2` / `rerank` models so a scoring run never stalls on it. |
+| `calibrate_rerank.py` | *(diagnostic)* Measures what pruning `rerank`'s paper axis would cost on your data. Read-only. |
 | `config.yaml` | Scoring parameters. Edit to taste. |
 | `topic_interests.csv` | **you edit** — `topic,interest` on a **-2..2** scale. Made by `make_topic_interests.py`; each run reports unrated tags and unparsable values. |
 | `papers_pdf/` | your papers as PDFs (**≥5 unique, with a text layer**) — matched semantically against each submission. |

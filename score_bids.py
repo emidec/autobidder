@@ -390,12 +390,24 @@ SPECTER2_ADAPTER = "allenai/specter2"
 SPECTER2_SEP = "[SEP]"   # BERT-based SPECTER2's sep_token; the model is trained on title+SEP+abstract
 
 DEFAULT_RERANK_MODEL = "BAAI/bge-reranker-v2-m3"   # multilingual cross-encoder; handles long abstracts
+RERANK_AGG_TOPK = 3              # a candidate's score is the mean of its top-k paper scores
 RERANK_MARGIN_FRAC = 0.10        # default shortlist headroom above --positive-frac
 RERANK_MAX_FRAC = 0.5            # past this the shortlist isn't one; specter2 fits better
 # Joint token budget for a (your paper, submission) pair. The model accepts 8192, so this is a
 # speed choice: at ~1.7 tokens per word, 1024 leaves ~300 words per side, which clears any
 # realistic abstract, while cost grows faster than length (1024 costs ~3x 512; 2048 ~20x).
 RERANK_MAX_LENGTH = 1024
+
+
+def paper_pair_texts(paper_texts):
+    """Your papers as the cross-encoder sees them: title+abstract where one parses, else the
+    raw leading page text. Shared so a calibration run feeds the model exactly what scoring does.
+    """
+    out = []
+    for raw in paper_texts:
+        pt, pa = _split_title_abstract(raw)
+        out.append((pt + ". " + pa) if pa else " ".join(raw.split()))
+    return out
 
 
 def _topk_mean(sim, k=3):
@@ -630,10 +642,7 @@ def _rerank_scores(paper_texts, sub_pairs, topn, model_id=DEFAULT_RERANK_MODEL,
     sys.stderr.flush()
 
     # ---- stage 2: cross-encoder rerank of the candidates only ----
-    pap_texts = []
-    for raw in paper_texts:
-        pt, pa = _split_title_abstract(raw)
-        pap_texts.append((pt + ". " + pa) if pa else " ".join(raw.split()))
+    pap_texts = paper_pair_texts(paper_texts)
     sys.stderr.write("Loading reranker (%s)...\n" % model_id)
     sys.stderr.flush()
     ce = CrossEncoder(model_id, max_length=max_length)
@@ -642,7 +651,7 @@ def _rerank_scores(paper_texts, sub_pairs, topn, model_id=DEFAULT_RERANK_MODEL,
     logits = ce.predict(pairs, batch_size=32, convert_to_numpy=True,
                         show_progress_bar=(len(pairs) > 200))
     ce_mat = np.asarray(logits, dtype="float64").reshape(len(cand), len(pap_texts))
-    ce_best = _topk_mean(ce_mat, k=3)                                       # aggregate over your papers
+    ce_best = _topk_mean(ce_mat, k=RERANK_AGG_TOPK)                         # aggregate over your papers
 
     # ---- reconcile: reranked band [1, 2) sits above the non-candidate band [0, 1) ----
     scores = np.empty(n, dtype="float64")

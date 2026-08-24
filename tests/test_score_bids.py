@@ -11,6 +11,7 @@ config into module globals, so setUpModule loads it once for the whole suite.
 
 import csv
 import io
+import math
 import os
 import subprocess
 import sys
@@ -375,6 +376,30 @@ class ColumnValidation(unittest.TestCase):
         r = self._run("no_pref.csv", ("paper", "title", "abstract", "topics"))
         self.assertNotEqual(0, r.returncode)
         self.assertIn("preference", r.stderr)
+
+
+class CalibrationStats(unittest.TestCase):
+    """calibrate_rerank's rank correlation, which drives its recommendation."""
+
+    def setUp(self):
+        import calibrate_rerank
+        self.cr = calibrate_rerank
+
+    def test_identical_orders_correlate_perfectly(self):
+        self.assertAlmostEqual(1.0, self.cr._spearman([1, 2, 3, 4], [1, 2, 3, 4]))
+
+    def test_reversed_orders_anticorrelate(self):
+        self.assertAlmostEqual(-1.0, self.cr._spearman([1, 2, 3, 4], [4, 3, 2, 1]))
+
+    def test_invariant_under_monotone_rescaling(self):
+        a = [0.1, 0.4, 0.35, 0.9]
+        self.assertAlmostEqual(self.cr._spearman(a, [x * 100 + 5 for x in a]), 1.0)
+
+    def test_ties_do_not_break_it(self):
+        self.assertFalse(math.isnan(self.cr._spearman([1, 1, 2, 3], [1, 2, 2, 3])))
+
+    def test_constant_input_is_undefined_not_a_crash(self):
+        self.assertTrue(math.isnan(self.cr._spearman([1, 1, 1], [1, 2, 3])))
 
 
 if __name__ == "__main__":
