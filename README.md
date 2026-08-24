@@ -194,7 +194,12 @@ both ends: almost no slack at `--positive-frac 0.01`, far more than any reorderi
 ### What a run costs
 
 Every shortlisted submission is scored against **every** one of your papers, so the work is
-`shortlist × papers` pairs. The run prints that number before it loads the model:
+`shortlist × papers` pairs — meaning **runtime is directly proportional to how many PDFs you have**.
+Adding a paper adds another full pass over the shortlist. `tfidf` and `specter2` don't work this way:
+they process each paper once and each submission once, so an extra PDF costs them nothing. Only a
+cross-encoder has to read every pair together.
+
+The run prints the pair count before it loads the model:
 
 ```
 rerank: 505 candidate(s) of 1442 submissions x 13 paper(s) = 6565 cross-encoder pair(s), max_length 1024
