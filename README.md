@@ -14,6 +14,8 @@ locally — no submission data leaves your machine.
 pip install scikit-learn pypdf
 ```
 
+[More packages needed depending on the [matching method](#matching-methods) used]
+
 Then, once per reviewing round:
 
 **1.** Put at least 5 of your own papers in `papers_pdf/`, as text-based PDFs — scans don't work.
@@ -121,7 +123,7 @@ Nothing else needs rebuilding.
 | Key | Default | What it does |
 |---|---|---|
 | `interest_weight` | `0.35` | How much your topic ratings steer the bid vs. similarity to your papers. `0` = pure paper-similarity, `1` = pure topic interests. |
-| `sem_gain` | `9.0` | Shapes the rank curve. `9` is linear; higher pushes mid-rank papers toward the extremes, i.e. more separation between near-miss and on-target. |
+| `sem_gain` | `9.0` | Shapes the rank curve. `9` is linear; higher pushes mid-rank papers toward the extremes, i.e., more separation between near-miss and on-target. |
 | `bid_max` | `20` | The output range: bids are written in `[-bid_max, bid_max]`. An integer in `[1, bid_limit]`. |
 | `bid_limit` | `100` | Validation ceiling for `bid_max` — HotCRP's own maximum. |
 | `ref_max` | `20` | Internal reference span the score is computed on. **Has no effect on your bids** — both halves of the blend scale with it and the final mapping depends only on ordering. Set `bid_max` instead. |
@@ -143,8 +145,7 @@ compare.
 
 ### Performance
 
-The methods don't differ by a constant factor — they differ in *shape*. Writing `n` for submissions,
-`P` for the PDFs in `papers_pdf/`, and `R` for `--rerank-frac`, the number of neural forward passes is:
+For `n` = #submissions, `P` = #papers in `papers_pdf/`, and `R` = `--rerank-frac` (the fraction of submissions that get cross-encoded), the number of neural forward passes is:
 
 ```
 tfidf      0                 no model at all
@@ -152,11 +153,7 @@ specter2   n + P             each text embedded once, independently
 rerank     R · n · P         every shortlisted submission against every paper
 ```
 
-The difference that matters is **additive vs. multiplicative**. `specter2` embeds each submission once
-and each paper once, so your two inputs *add*. A cross-encoder can't do that — its whole advantage is
-reading both texts in one pass, which forces one pass per *pair*, so your inputs *multiply*.
-
-Three consequences:
+This means:
 
 - **Adding a PDF is free for `specter2` and linear for `rerank`.** One more paper is one more embedding
   versus one more pass over the entire shortlist. Going from 10 papers to 20 leaves `specter2`
@@ -166,7 +163,7 @@ Three consequences:
 - **Re-runs are nearly free for `specter2`** — embeddings are cached by text, so a second run with
   different `--positive-frac` re-embeds nothing. `rerank` has no such cache and repeats every pair.
 
-Per-pass cost differs too, and compounds it: the reranker is a ~568M-parameter model reading pairs up
+The reranker is a ~568M-parameter model reading pairs up
 to `--rerank-max-length` tokens, while SPECTER2 is a ~110M-parameter model reading one text at 512.
 Attention is quadratic in length, so a rerank pass costs an order of magnitude more than a SPECTER2 one
 on top of there being more of them.
@@ -180,8 +177,6 @@ A round of **1,000 submissions** with **10 papers**, at the default `--positive-
 | `specter2` | `1000 + 10` | = 1,010 | about a minute, then cached |
 | `rerank` | `0.2 × 1000 × 10` | = 2,000 | **about 45 minutes** |
 
-Twice the passes, but roughly forty times the wall time — that gap is per-pass cost, not count. At this
-scale `rerank` is something you start and walk away from, while `specter2` is a coffee break.
 
 `specter2` and `rerank` each download their model once, then run offline and deterministically. That
 first download happens *inside* a scoring run, which can leave it apparently doing nothing for several
@@ -201,7 +196,7 @@ script.
 are cached in `.specter2_cache.npz` keyed by the text they came from, so re-runs only embed what's new
 — a fully-cached re-run doesn't even load the model. Override the path with `--emb-cache`.
 
-**`rerank`** *(beta)* is a two-stage pipeline. TF-IDF ranks the whole pool cheaply, the top slice
+**`rerank`** *(beta)* is a two-stage pipeline. TF-IDF ranks the whole pool cheaply; the top slice
 of that ranking becomes a **shortlist**, and a local cross-encoder rescores only the shortlist. The
 cross-encoder reads each *(your paper, submission)* pair **together** and judges relevance directly,
 rather than embedding each text alone and comparing vectors — more accurate, but far too slow to run on
