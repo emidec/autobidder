@@ -5,7 +5,7 @@ score_bids.py - score conference submissions by similarity to your work, and fil
 Matching is SEMANTIC, not keyword-based. Your papers (papers_pdf/) and each submission's
 title+abstract are compared, and every submission is scored by its mean similarity to your
 three most-similar papers -- so it has to match a sub-area of your work rather than one
-fluke neighbour. Your -2..2 topic interests then steer that score (a blend). Finally the
+fluke neighbor. Your -2..2 topic interests then steer that score (a blend). Finally the
 bids are written in [-bid_max, bid_max], targeting a chosen fraction of positive bids
 without squashing your top papers.
 

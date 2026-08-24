@@ -67,7 +67,7 @@ class BidMapping(unittest.TestCase):
         self.assertEqual(sb.BID_MIN, min(bids))
 
     def test_target_one_tops_out_one_short(self):
-        # the comparison is strict, so some paper must be the lowest -- documented behaviour
+        # the comparison is strict, so some paper must be the lowest -- documented behavior
         bids = sb.bids_for_positive_fraction([float(v) for v in range(20)], 1.0)
         self.assertEqual(19, sum(1 for b in bids if b > 0))
 
