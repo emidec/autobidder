@@ -188,12 +188,12 @@ specter2   n + P             each text embedded once, independently
 rerank     R · n · P         every shortlisted submission against every paper
 ```
 
-This means:
+Notes:
 
 - **Adding a PDF is free for `specter2` and linear for `rerank`.** One more paper is one more embedding
   versus one more pass over the entire shortlist. Going from 10 papers to 20 leaves `specter2`
   essentially unchanged and doubles `rerank`.
-- **`--positive-frac` could also a cost knob, though for `rerank` only**, because `R` defaults to tracking it. Raising
+- **`--positive-frac` could also be a cost knob, though for `rerank` only**, because `R` defaults to tracking it. Raising
   your bid target raises the shortlist, and the shortlist multiplies by `P`.
 - **Re-runs are nearly free for `specter2`** — embeddings are cached by text, so a second run with
   different `--positive-frac` re-embeds nothing. `rerank` has no such cache and repeats every pair.
