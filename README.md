@@ -14,9 +14,9 @@ locally — no submission data leaves your machine.
 pip install scikit-learn pypdf
 ```
 
-[More packages needed depending on the [matching method](#matching-methods) used]
+[More packages needed depending on the [Matching Method](#matching-methods) used]
 
-Then, once per reviewing round:
+Then:
 
 **1.** Put at least 5 of your own papers in `papers_pdf/`, as text-based PDFs — scans don't work.
 
@@ -34,13 +34,14 @@ python3 make_topic_interests.py revprefs.csv
 against your papers — only that step differs, so bids stay comparable across methods:
 
 ```bash
-python3 score_bids.py revprefs.csv                    # tfidf (default): shared wording, nothing to install
+python3 score_bids.py revprefs.csv                     # tfidf (default): shared wording, nothing to install
+python3 score_bids.py revprefs.csv --positive-frac 0.2 # big positively on ~20% papers instead of default 10%
 python3 score_bids.py revprefs.csv --method specter2  # meaning, not just wording  (+ torch transformers adapters)
 python3 score_bids.py revprefs.csv --method rerank    # most precise, reads pairs   (+ sentence-transformers, beta)
 ```
 
 `specter2` and `rerank` download their model once, then run offline — see
-[Matching methods](#matching-methods) for what each one does.
+[Matching Methods](#matching-methods) for what each one does.
 
 **5.** Upload the `revprefs.scored.<timestamp>.csv` it wrote back to HotCRP. Done.
 
