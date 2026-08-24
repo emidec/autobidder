@@ -99,7 +99,6 @@ the other columns are ignored.
 | Flag | Default | What it does |
 |---|---|---|
 | `--positive-frac F` | `0.1` | Fraction of papers to bid positively on (0–1). See below. |
-| `--zero-below N` | — | Floor every bid below `N` to `0` (neutral). See below. |
 | `--keep-original` | off | Don't delete the input CSV after scoring. |
 | `--method M` | `tfidf` | Similarity method: `tfidf`, `specter2`, or `rerank`. See [Matching methods](#matching-methods). |
 | `-o`, `--output PATH` | timestamped | Output CSV path. |
@@ -118,12 +117,6 @@ the other columns are ignored.
 the target count and rescales each side to the full range, so that many end up positive **and** your
 strongest papers still reach ±`bid_max`. The run reports the fraction it achieved; ties at the
 threshold are the one thing that can hold it below target, and it warns if the miss exceeds 10 points.
-
-**`--zero-below N`** — sets every bid strictly below `N` to `0`, negatives included. `--zero-below 5`
-keeps only bids of +5 or better, so you surface just the papers you actively want. Applied after
-`--positive-frac` and reported separately: the run states what `--positive-frac` achieved on its own
-terms, then how many bids were zeroed and how many positives remain. `N` may not exceed `bid_max`,
-since nothing would survive it.
 
 **Re-rating a topic** — edit its `interest` in `topic_interests.csv` and re-run `score_bids.py`.
 Nothing else needs rebuilding.
