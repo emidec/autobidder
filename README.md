@@ -8,7 +8,7 @@ locally — no submission data leaves your machine.
 
 ---
 
-## Quickstart
+## How to use autobiddexr
 
 ```bash
 pip install scikit-learn pypdf
@@ -20,8 +20,7 @@ Two of the three [matching methods](#matching-methods) need one more package eac
 pip install sentence-transformers          # for --method rerank
 pip install torch transformers adapters    # for --method specter2
 ```
-
-On **Linux**, do this first or pip will pull ~2–3 GB of CUDA you may not need — see
+On **Linux**, do this first or pip install sentence-transformer will pull 2GB+ of CUDA you may not need — see
 [Requirements](#requirements):
 
 ```bash
@@ -49,7 +48,6 @@ against your papers — only that step differs, so bids stay comparable across m
 python3 score_bids.py revprefs.csv                      # tfidf (default): shared wording, nothing to install
 python3 score_bids.py revprefs.csv --method specter2    # meaning, not just wording  (+ torch transformers adapters)
 python3 score_bids.py revprefs.csv --method rerank      # most precise, reads pairs  (+ sentence-transformers, beta)
-python3 score_bids.py revprefs.csv --positive-frac 0.2  # unrelated to --method: bid positively on ~20% of papers
 ```
 
 `specter2` and `rerank` download their model once, then run offline — see
@@ -60,18 +58,17 @@ python3 score_bids.py revprefs.csv --positive-frac 0.2  # unrelated to --method:
 > ⚠️ Step 4 **deletes `revprefs.csv`** — it holds every submission's abstract, and the scored output
 > has them stripped so the confidential copy doesn't linger. Pass `--keep-original` to keep it.
 
-By default this bids positively on ~10% of papers; `--positive-frac` and the rest of the flags are in
-[Options](#options).
+By default this bids positively on ~10% of papers. You can change this with `--positive-frac`; you can find this and the rest of the flags in [Options](#options).
 
 ---
 
 ## The HotCRP round trip
 
-**Export.** Once submissions are visible, HotCRP shows a **Review preferences** link on the home page,
+**Export.** HotCRP generally shows a **Review preferences** link on the home page,
 listing every submission with a preference box. Select all papers and use the page's **Download**
-action → *Review preferences*. The default columns are `paper, title, preference`; add the **abstract**
+action → *Preference file with abstracts*. If you don’t see this, you will probably see a download *Review preference* or *Preference file*, and you should be able to add to the default columns `paper, title, preference`, by adding columns **abstract**
 and **topics** columns to the view first (the **Show** menu / column options on the search bar → enable
-*Abstract* and *Topics*), then download. Save it as `revprefs.csv`.
+*Abstract* and *Topics*), and then download. Save it as `revprefs.csv`.
 
 `score_bids.py` checks the columns before it does anything else:
 
