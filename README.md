@@ -4,7 +4,7 @@ Fill in your HotCRP reviewer bids automatically. Rate the conference's topics on
 your own papers, and it scores every submission by how well it matches your work. Everything runs
 locally — no submission data leaves your machine.
 
-**Status:** beta — `v0.3.5-beta`.
+**Version:** `v0.5.0`.
 
 ---
 
@@ -34,7 +34,7 @@ against your papers — only that step differs, so bids stay comparable across m
 ```bash
 python3 score_bids.py revprefs.csv                    # tfidf (default): shared wording, nothing to install
 python3 score_bids.py revprefs.csv --method specter2  # meaning, not just wording  (+ torch transformers adapters)
-python3 score_bids.py revprefs.csv --method rerank    # most precise, reads pairs   (+ sentence-transformers)
+python3 score_bids.py revprefs.csv --method rerank    # most precise, reads pairs   (+ sentence-transformers, beta)
 ```
 
 `specter2` and `rerank` download their model once, then run offline — see
@@ -97,7 +97,7 @@ the other columns are ignored.
 | `--pdfs DIR` | `papers_pdf` | Folder of your paper PDFs. |
 | `--config PATH` | `config.yaml` | Scoring parameters file (defaults to the one beside the script). |
 | `--profile-out PATH` | timestamped | Where to save the profile summary JSON. |
-| `--rerank-topn N` | auto | `rerank` only: how many TF-IDF candidates the cross-encoder rescores (auto = `1.5 × --positive-frac × #submissions`, floor 150, cap 40% of pool). |
+| `--rerank-frac F` | `--positive-frac` + 0.10 | `rerank` only: fraction of submissions the cross-encoder rescores. |
 | `--rerank-model ID` | `BAAI/bge-reranker-v2-m3` | `rerank` only: cross-encoder model id. |
 | `--rerank-max-length N` | `1024` | `rerank` only: joint token budget per (paper, submission) pair. |
 | `--emb-cache PATH` | `.specter2_cache.npz` | `specter2` only: embedding cache file. |
@@ -139,7 +139,7 @@ compare.
 |---|---|---|---|
 | **`tfidf`** *(default)* | nothing extra | fast | Shared vocabulary. Light, fully offline, no model download. |
 | **`specter2`** | `pip install torch transformers adapters` | slower on CPU | Meaning rather than wording — catches related work phrased differently. |
-| **`rerank`** | `pip install sentence-transformers` | slowest on CPU | The most precise. TF-IDF shortlists, then a cross-encoder rescores the shortlist. |
+| **`rerank`** *(beta)* | `pip install sentence-transformers` | slowest on CPU | The most precise. TF-IDF shortlists, then a cross-encoder rescores the shortlist. |
 
 `specter2` and `rerank` each download their model once, then run offline and deterministically. That
 first download happens *inside* a scoring run, which can leave it apparently doing nothing for several
@@ -159,42 +159,53 @@ script.
 are cached in `.specter2_cache.npz` keyed by the text they came from, so re-runs only embed what's new
 — a fully-cached re-run doesn't even load the model. Override the path with `--emb-cache`.
 
-**`rerank`** uses TF-IDF to shortlist the top-N submissions, then has a local cross-encoder rescore
-only those. A cross-encoder reads each *(your paper, submission)* pair **together** and judges their
-relevance directly, rather than embedding each text alone and comparing vectors — more precise, but too
-slow for a whole pool, hence the shortlist. Override the model with `--rerank-model`.
+**`rerank`** *(beta)* is a two-stage pipeline. TF-IDF ranks the whole pool cheaply, the top slice
+of that ranking becomes a **shortlist**, and a local cross-encoder rescores only the shortlist. The
+cross-encoder reads each *(your paper, submission)* pair **together** and judges relevance directly,
+rather than embedding each text alone and comparing vectors — more accurate, but far too slow to run on
+every submission, which is the whole reason for the shortlist. Reranked submissions are then placed
+above the rest, which keep their TF-IDF order, and the usual normalize/blend/map steps run unchanged.
 
-`--rerank-topn` defaults to `1.5 × --positive-frac × #submissions`, floored at 150 and **capped at 40%
-of the pool**. The floor of that range is what matters: positive bids come from the reranked band, so a
-shortlist smaller than `--positive-frac × #submissions` leaves some positive bids on submissions the
-cross-encoder never scored. The cap matters for cost — cost is `shortlist × papers`, and without it a
-wide `--positive-frac` shortlists most of the pool, which is no longer a shortlist. The run says so when
-the cap binds, and warns outright when it binds hard enough that the positive band is no longer covered
-— at which point `specter2` is the better tool.
+### Sizing the shortlist
 
-Each candidate is scored against **every** one of your papers, so the real work is
-`candidates × papers` pairs — the run prints that number before loading the model, since
-`--rerank-topn` scales with `--positive-frac` and the cost can grow via a flag you changed for another
-reason.
-
-**Sizing a run.** Start it and read the first line it prints, before the model loads:
-
-```
-rerank: 541 candidate(s) of 1442 submissions x 13 paper(s) = 7033 cross-encoder pair(s), max_length 1024
-```
-
-That pair count is the whole job. If it's larger than you want to wait for, stop and set
-`--rerank-topn` yourself — it must stay at or above `--positive-frac × #submissions`, or positive bids
-land on submissions the cross-encoder never scored. To try the method out cheaply, pin it at the floor:
+One setting controls this: **`--rerank-frac`**, the fraction of submissions that get cross-encoded.
 
 ```bash
-python3 score_bids.py revprefs.csv --method rerank --keep-original --rerank-topn 150
+python3 score_bids.py revprefs.csv --method rerank --rerank-frac 0.2   # rescore the top 20%
 ```
 
-Fetch the model first with `python3 fetch_models.py rerank`, otherwise the first run spends its opening
-minutes downloading 2.3 GB with nothing to show. Each pair gets a joint budget of `--rerank-max-length` tokens (default **1024**, roughly 300
-words per side, enough for any realistic abstract). The model accepts up to 8192, but cost grows faster
-than length — 2048 runs several times slower for headroom no abstract uses.
+It defaults to **`--positive-frac` + 0.10** — ten points of headroom above whatever you're bidding on.
+So the default at `--positive-frac 0.1` is `0.2`, and at `0.25` it's `0.35`.
+
+Two things follow from how the pipeline works:
+
+- **It can't go below `--positive-frac`.** Positive bids come from the reranked slice, so a shortlist
+  smaller than your positive target would leave some positive bids on submissions the cross-encoder
+  never scored. Set it lower and the run stops and tells you the minimum.
+- **Above ~0.5 it stops being worth it.** You're rescoring most of the pool, so the two-stage saving
+  has largely gone — `--method specter2` is the better tool at that point, and the run says so.
+
+The headroom exists so the cross-encoder can promote submissions TF-IDF ranked too low. It's ten points
+*of the pool* rather than a multiple of your target, because what it absorbs is disagreement between the
+two rankings — a property of the pool, not of how many papers you want. A multiple would misbehave at
+both ends: almost no slack at `--positive-frac 0.01`, far more than any reordering needs at `0.5`. The
+`0.10` itself is a starting value chosen on those grounds, not a measured optimum.
+
+### What a run costs
+
+Every shortlisted submission is scored against **every** one of your papers, so the work is
+`shortlist × papers` pairs. The run prints that number before it loads the model:
+
+```
+rerank: 505 candidate(s) of 1442 submissions x 13 paper(s) = 6565 cross-encoder pair(s), max_length 1024
+```
+
+If that's more than you want to wait for, stop and lower `--rerank-frac`. Each pair gets a joint budget
+of `--rerank-max-length` tokens (default **1024**, roughly 300 words per side, enough for any realistic
+abstract); the model accepts up to 8192, but cost grows faster than length.
+
+Fetch the model first with `python3 fetch_models.py rerank`, or the first run spends its opening minutes
+downloading 2.3 GB with nothing to show.
 
 ---
 

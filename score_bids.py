@@ -390,9 +390,8 @@ SPECTER2_ADAPTER = "allenai/specter2"
 SPECTER2_SEP = "[SEP]"   # BERT-based SPECTER2's sep_token; the model is trained on title+SEP+abstract
 
 DEFAULT_RERANK_MODEL = "BAAI/bge-reranker-v2-m3"   # multilingual cross-encoder; handles long abstracts
-RERANK_TOPN_FLOOR = 150          # minimum cross-encoder shortlist, even for small pools
-RERANK_TOPN_CUSHION = 1.5        # auto shortlist = this x the expected positive band
-RERANK_TOPN_MAX_FRAC = 0.4       # ... but never more than this fraction of the pool
+RERANK_MARGIN_FRAC = 0.10        # default shortlist headroom above --positive-frac
+RERANK_MAX_FRAC = 0.5            # past this the shortlist isn't one; specter2 fits better
 # Joint token budget for a (your paper, submission) pair. The model accepts 8192, so this is a
 # speed choice: at ~1.7 tokens per word, 1024 leaves ~300 words per side, which clears any
 # realistic abstract, while cost grows faster than length (1024 costs ~3x 512; 2048 ~20x).
@@ -585,7 +584,7 @@ def _specter2_scores(paper_texts, sub_pairs, cache_path=DEFAULT_EMB_CACHE):
     return best, (corpus_top_terms(vec, P) if vec is not None else [])
 
 
-def _rerank_scores(paper_texts, sub_pairs, topn=RERANK_TOPN_FLOOR, model_id=DEFAULT_RERANK_MODEL,
+def _rerank_scores(paper_texts, sub_pairs, topn, model_id=DEFAULT_RERANK_MODEL,
                    max_length=RERANK_MAX_LENGTH):
     """--method rerank: TF-IDF retrieval + a local cross-encoder reranker (retrieve-then-rerank).
 
@@ -656,7 +655,7 @@ def _rerank_scores(paper_texts, sub_pairs, topn=RERANK_TOPN_FLOOR, model_id=DEFA
 
 
 def semantic_scores(paper_texts, sub_pairs, method="tfidf", cache_path=DEFAULT_EMB_CACHE,
-                    rerank_topn=RERANK_TOPN_FLOOR, rerank_model=DEFAULT_RERANK_MODEL,
+                    rerank_topn=None, rerank_model=DEFAULT_RERANK_MODEL,
                     rerank_max_length=RERANK_MAX_LENGTH):
     """Per-submission similarity to your most-similar papers (top-k), by the chosen method.
 
@@ -680,40 +679,27 @@ def corpus_top_terms(vec, P, topn=40):
 
 
 # ------------------------- target positive fraction --------------------------
-def _auto_rerank_topn(n_submissions, positive_frac):
-    """Default shortlist size for --method rerank.
+def rerank_shortlist_frac(positive_frac, rerank_frac=None):
+    """Fraction of the pool the cross-encoder rescores.
 
-    Positive bids are the top ~positive_frac of the pool, and reranked candidates sort above
-    everything else -- so the shortlist must hold at least the whole positive band, or some
-    positive bids fall to papers the cross-encoder never scored. We take a CUSHION multiple of
-    that band (headroom to promote papers TF-IDF underranks), floored for small rounds.
+    Reranked candidates sort above the rest, so positive bids come from the reranked set: the
+    shortlist must cover positive_frac of the pool, or some positive bids fall to submissions the
+    cross-encoder never scored. That floor is a correctness condition, not a preference.
 
-    It is also CAPPED as a fraction of the pool. Cost is shortlist x papers, and without a cap
-    the cushion multiplies straight through positive_frac: at 0.25 the old 3x cushion shortlisted
-    three quarters of the pool, which is not a shortlist -- retrieve-then-rerank exists because
-    cross-encoding everything is too slow. Past the cap the method is the wrong tool, so the two
-    boundaries that matter are reported rather than silently absorbed.
+    Anything above it is headroom for promoting submissions TF-IDF underranks. The default adds
+    RERANK_MARGIN_FRAC of the POOL rather than a multiple of positive_frac, because what the
+    headroom absorbs is rank displacement between the two scorers -- a property of the pool, not
+    of the target. A multiple of the target misbehaves at both ends: at positive_frac 0.01 it
+    leaves a handful of ranks of slack, and at 0.5 far more than any reordering needs.
     """
-    band = positive_frac * n_submissions                 # must be covered to stay meaningful
-    want = math.ceil(RERANK_TOPN_CUSHION * band)
-    ceiling = max(RERANK_TOPN_FLOOR, int(RERANK_TOPN_MAX_FRAC * n_submissions))
-    topn = max(RERANK_TOPN_FLOOR, min(want, ceiling))
-    if want > ceiling:
-        if ceiling < band:
-            sys.stderr.write(
-                "WARNING: --positive-frac %.2f wants %d positive bids, but the rerank shortlist is "
-                "capped at %d (%.0f%% of %d submissions).\n  About %d positive bid(s) will fall to "
-                "submissions the cross-encoder never scored, ordered by TF-IDF alone.\n  Lower "
-                "--positive-frac, set --rerank-topn explicitly, or use --method specter2 for a "
-                "target this wide.\n"
-                % (positive_frac, math.ceil(band), topn, 100 * RERANK_TOPN_MAX_FRAC,
-                   n_submissions, math.ceil(band) - topn))
-        else:
-            sys.stderr.write(
-                "NOTE: rerank shortlist capped at %d (%.0f%% of %d submissions) instead of %d. The "
-                "positive band is still covered, with less headroom to promote papers TF-IDF "
-                "underranks.\n" % (topn, 100 * RERANK_TOPN_MAX_FRAC, n_submissions, want))
-    return topn
+    if rerank_frac is not None:
+        return rerank_frac
+    return max(positive_frac, min(positive_frac + RERANK_MARGIN_FRAC, RERANK_MAX_FRAC))
+
+
+def rerank_topn(n_submissions, frac):
+    """The shortlist fraction as a candidate count, at least 1 and at most the whole pool."""
+    return max(1, min(n_submissions, int(math.ceil(frac * n_submissions))))
 
 
 def bids_for_positive_fraction(values, target):
@@ -906,12 +892,11 @@ def main(argv=None):
     ap.add_argument("--emb-cache", dest="emb_cache", default=DEFAULT_EMB_CACHE,
                     help="cache file for --method specter2 embeddings, reused across runs "
                          "(default: %s)" % DEFAULT_EMB_CACHE)
-    ap.add_argument("--rerank-topn", dest="rerank_topn", type=int, default=None, metavar="N",
-                    help="--method rerank: rescore the top-N TF-IDF candidates with the cross-encoder "
-                         "(default: auto = %g x --positive-frac x #submissions, floored at %d and "
-                         "capped at %g of the pool, so the shortlist covers the positive bid band "
-                         "without becoming the whole pool)"
-                         % (RERANK_TOPN_CUSHION, RERANK_TOPN_FLOOR, RERANK_TOPN_MAX_FRAC))
+    ap.add_argument("--rerank-frac", dest="rerank_frac", type=float, default=None, metavar="F",
+                    help="--method rerank: fraction (0..1) of submissions the cross-encoder "
+                         "rescores. Default: --positive-frac plus %g, capped at %g. Cannot be "
+                         "below --positive-frac, since positive bids come from the reranked set."
+                         % (RERANK_MARGIN_FRAC, RERANK_MAX_FRAC))
     ap.add_argument("--rerank-model", dest="rerank_model", default=DEFAULT_RERANK_MODEL,
                     help="--method rerank: cross-encoder model id (default: %s)" % DEFAULT_RERANK_MODEL)
     ap.add_argument("--rerank-max-length", dest="rerank_max_length", type=int,
@@ -943,8 +928,13 @@ def main(argv=None):
         ap.error("input not found: %s" % args.input)
     if not (0.0 <= args.positive_frac <= 1.0):
         ap.error("--positive-frac must be a float between 0 and 1")
-    if args.rerank_topn is not None and args.rerank_topn < 1:
-        ap.error("--rerank-topn must be a positive integer")
+    if args.rerank_frac is not None:
+        if not (0.0 < args.rerank_frac <= 1.0):
+            ap.error("--rerank-frac must be greater than 0 and at most 1")
+        if args.rerank_frac < args.positive_frac:
+            ap.error("--rerank-frac %.2f is below --positive-frac %.2f. Positive bids come from "
+                     "the reranked set, so the shortlist has to cover them -- use at least %.2f."
+                     % (args.rerank_frac, args.positive_frac, args.positive_frac))
     if args.rerank_max_length < 16:
         ap.error("--rerank-max-length must be at least 16 tokens")
     load_config(args.config)
@@ -990,10 +980,13 @@ def main(argv=None):
     # narrows pdfs to the ones with real text, so meta.unique_pdfs counts what was used
     pdfs, paper_texts = usable_paper_texts(pdfs, args.pdfs, MIN_UNIQUE_PDFS)
     sub_pairs = [((r.get("title") or ""), (r.get("abstract") or "")) for r in rows]
-    rerank_topn = (args.rerank_topn if args.rerank_topn is not None
-                   else _auto_rerank_topn(len(rows), args.positive_frac))
+    rr_frac = rerank_shortlist_frac(args.positive_frac, args.rerank_frac)
+    rr_topn = rerank_topn(len(rows), rr_frac)
+    if args.method == "rerank" and rr_frac > RERANK_MAX_FRAC:
+        sys.stderr.write("NOTE: --rerank-frac %.2f rescores most of the pool, so retrieve-then-"
+                         "rerank saves little here; --method specter2 likely fits better.\n" % rr_frac)
     sem, top_terms = semantic_scores(paper_texts, sub_pairs, args.method, cache_path=args.emb_cache,
-                                     rerank_topn=rerank_topn, rerank_model=args.rerank_model,
+                                     rerank_topn=rr_topn, rerank_model=args.rerank_model,
                                      rerank_max_length=args.rerank_max_length)
     # Rank/quantile-transform similarity onto the fixed reference scale: robust to TF-IDF's
     # right-skew and SPECTER2's anisotropy, and -- unlike a z-score -- independent of this
