@@ -141,7 +141,19 @@ compare.
 | **`specter2`** | `pip install torch transformers adapters` | slower on CPU | Meaning rather than wording — catches related work phrased differently. |
 | **`rerank`** | `pip install sentence-transformers` | slowest on CPU | The most precise. TF-IDF shortlists, then a cross-encoder rescores the shortlist. |
 
-`specter2` and `rerank` each download their model once, then run offline and deterministically.
+`specter2` and `rerank` each download their model once, then run offline and deterministically. That
+first download happens *inside* a scoring run, which can leave it apparently doing nothing for several
+minutes — so fetch it separately instead:
+
+```bash
+python3 fetch_models.py rerank          # ~2.3 GB
+python3 fetch_models.py specter2        # ~0.5 GB, plus its adapter
+python3 fetch_models.py all --check     # what's already cached? downloads nothing
+```
+
+Models go to the shared HuggingFace cache (`~/.cache/huggingface`, or `HF_HOME`), which is where
+`score_bids.py` looks. `--check` exits non-zero if anything is missing, so it works in a pre-flight
+script.
 
 **`specter2`** uses AllenAI SPECTER2, trained specifically for paper-to-paper similarity. Embeddings
 are cached in `.specter2_cache.npz` keyed by the text they came from, so re-runs only embed what's new
@@ -169,6 +181,7 @@ than length — 2048 runs several times slower for headroom no abstract uses.
 |---|---|
 | `make_topic_interests.py` | Creates a blank `topic_interests.csv` (every topic at 0) from the preferences CSV. Stdlib only. |
 | `score_bids.py` | Scores submissions by similarity to your papers (+ interests) and fills the bids. |
+| `fetch_models.py` | Pre-downloads the `specter2` / `rerank` models so a scoring run never stalls on it. |
 | `config.yaml` | Scoring parameters. Edit to taste. |
 | `topic_interests.csv` | **you edit** — `topic,interest` on a **-2..2** scale. Made by `make_topic_interests.py`; each run reports unrated tags and unparsable values. |
 | `papers_pdf/` | your papers as PDFs (**≥5 unique, with a text layer**) — matched semantically against each submission. |
