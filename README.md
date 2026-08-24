@@ -14,7 +14,19 @@ locally — no submission data leaves your machine.
 pip install scikit-learn pypdf
 ```
 
-[More packages needed depending on the [Matching Method](#matching-methods) used]
+Two of the three [matching methods](#matching-methods) need one more package each:
+
+```bash
+pip install sentence-transformers          # for --method rerank
+pip install torch transformers adapters    # for --method specter2
+```
+
+On **Linux**, do this first or pip will pull ~2–3 GB of CUDA you may not need — see
+[Requirements](#requirements):
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+```
 
 Then:
 
@@ -34,10 +46,10 @@ python3 make_topic_interests.py revprefs.csv
 against your papers — only that step differs, so bids stay comparable across methods:
 
 ```bash
-python3 score_bids.py revprefs.csv                     # tfidf (default): shared wording, nothing to install
-python3 score_bids.py revprefs.csv --positive-frac 0.2 # big positively on ~20% papers instead of default 10%
-python3 score_bids.py revprefs.csv --method specter2  # meaning, not just wording  (+ torch transformers adapters)
-python3 score_bids.py revprefs.csv --method rerank    # most precise, reads pairs   (+ sentence-transformers, beta)
+python3 score_bids.py revprefs.csv                      # tfidf (default): shared wording, nothing to install
+python3 score_bids.py revprefs.csv --method specter2    # meaning, not just wording  (+ torch transformers adapters)
+python3 score_bids.py revprefs.csv --method rerank      # most precise, reads pairs  (+ sentence-transformers, beta)
+python3 score_bids.py revprefs.csv --positive-frac 0.2  # unrelated to --method: bid positively on ~20% of papers
 ```
 
 `specter2` and `rerank` download their model once, then run offline — see
@@ -142,7 +154,7 @@ compare.
 |---|---|---|---|
 | **`tfidf`** *(default)* | nothing extra | fast | Shared vocabulary. Light, fully offline, no model download. |
 | **`specter2`** | `pip install torch transformers adapters` | slower | Meaning rather than wording — catches related work phrased differently. |
-| **`rerank`** *(beta)* | `pip install sentence-transformers` | slowest | The most precise. TF-IDF shortlists, then a cross-encoder rescores the shortlist. |
+| **`rerank`** *(beta)* | `pip install sentence-transformers` *(pulls torch)* | slowest | The most precise. TF-IDF shortlists, then a cross-encoder rescores the shortlist. |
 
 ### Performance
 
@@ -177,7 +189,6 @@ A round of **1,000 submissions** with **10 papers**, at the default `--positive-
 | `tfidf` | 0 | | seconds |
 | `specter2` | `1000 + 10` | = 1,010 | about a minute, then cached |
 | `rerank` | `0.2 × 1000 × 10` | = 2,000 | **about 45 minutes** |
-
 
 `specter2` and `rerank` each download their model once, then run offline and deterministically. That
 first download happens *inside* a scoring run, which can leave it apparently doing nothing for several
@@ -300,7 +311,18 @@ read before it's overwritten. The first run just notes there's nothing to compar
   (recent versions need 3.10+).
 - `scikit-learn` and `pypdf` — required. `pip install scikit-learn pypdf`
 - `PyYAML` — optional; `score_bids.py` reads `config.yaml` with a built-in fallback parser without it.
-- Per-method extras are listed under [Matching methods](#matching-methods).
+- Per-method extras are listed under [Matching methods](#matching-methods). Both of them install
+  `torch` — `sentence-transformers` depends on it too, even though the command doesn't say so.
+
+> ⚠️ **Linux: `torch` defaults to the CUDA build.** pip serves it whether or not you own an NVIDIA
+> GPU, dragging in a dozen `nvidia-*` packages totaling **2–3 GB**. To get the CPU build instead, run
+> this *before* either per-method command:
+>
+> ```bash
+> pip install torch --index-url https://download.pytorch.org/whl/cpu
+> ```
+>
+> macOS is unaffected — there is only one wheel for Darwin (CPU + MPS).
 
 ---
 
