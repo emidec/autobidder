@@ -135,11 +135,52 @@ how that similarity is computed. Everything downstream (the interest blend, `--p
 report) is identical, so you can switch freely between rounds or re-run with `--keep-original` and
 compare.
 
-| `--method` | Needs | Speed | Good for |
+| `--method` | Needs | Model passes | Good for |
 |---|---|---|---|
-| **`tfidf`** *(default)* | nothing extra | fast | Shared vocabulary. Light, fully offline, no model download. |
-| **`specter2`** | `pip install torch transformers adapters` | slower on CPU | Meaning rather than wording — catches related work phrased differently. |
-| **`rerank`** *(beta)* | `pip install sentence-transformers` | slowest on CPU | The most precise. TF-IDF shortlists, then a cross-encoder rescores the shortlist. |
+| **`tfidf`** *(default)* | nothing extra | **none** | Shared vocabulary. Light, fully offline, no model download. |
+| **`specter2`** | `pip install torch transformers adapters` | **`n + P`** | Meaning rather than wording — catches related work phrased differently. |
+| **`rerank`** *(beta)* | `pip install sentence-transformers` | **`R · n · P`** | The most precise. TF-IDF shortlists, then a cross-encoder rescores the shortlist. |
+
+### Performance
+
+The methods don't differ by a constant factor — they differ in *shape*. Writing `n` for submissions,
+`P` for the PDFs in `papers_pdf/`, and `R` for `--rerank-frac`, the number of neural forward passes is:
+
+```
+tfidf      0                 no model at all
+specter2   n + P             each text embedded once, independently
+rerank     R · n · P         every shortlisted submission against every paper
+```
+
+The difference that matters is **additive vs. multiplicative**. `specter2` embeds each submission once
+and each paper once, so your two inputs *add*. A cross-encoder can't do that — its whole advantage is
+reading both texts in one pass, which forces one pass per *pair*, so your inputs *multiply*.
+
+Three consequences:
+
+- **Adding a PDF is free for `specter2` and linear for `rerank`.** One more paper is one more embedding
+  versus one more pass over the entire shortlist. Going from 13 papers to 20 leaves `specter2`
+  unchanged and makes `rerank` 54% slower.
+- **`--positive-frac` is a cost knob for `rerank` only**, because `R` defaults to tracking it. Raising
+  your bid target raises the shortlist, and the shortlist multiplies by `P`.
+- **Re-runs are nearly free for `specter2`** — embeddings are cached by text, so a second run with
+  different `--positive-frac` re-embeds nothing. `rerank` has no such cache and repeats every pair.
+
+Per-pass cost differs too, and compounds it: the reranker is a ~568M-parameter model reading pairs up
+to `--rerank-max-length` tokens, while SPECTER2 is a ~110M-parameter model reading one text at 512.
+Attention is quadratic in length, so a rerank pass costs an order of magnitude more than a SPECTER2 one
+on top of there being more of them.
+
+On a 1,442-submission round with 13 PDFs at the default `--positive-frac 0.1`:
+
+| | forward passes | measured on an M-series Mac |
+|---|---|---|
+| `tfidf` | 0 | seconds |
+| `specter2` | 1,455 | about a minute, then cached |
+| `rerank` | 3,757 | **~1.5 hours** |
+
+2.6× the passes, ~80× the wall time — that gap is the per-pass cost, not the count. If your round is
+this size, `rerank` is an overnight job and `specter2` is a coffee break.
 
 `specter2` and `rerank` each download their model once, then run offline and deterministically. That
 first download happens *inside* a scoring run, which can leave it apparently doing nothing for several
