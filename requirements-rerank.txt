@@ -1,0 +1,5 @@
+# --method rerank: the base packages plus the cross-encoder library (pulls torch + transformers).
+#   pip install -r requirements-rerank.txt
+# On Linux, install the CPU build of torch first, or pip pulls 2-3 GB of CUDA (see README).
+-r requirements.txt
+sentence-transformers

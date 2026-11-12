@@ -1,0 +1,7 @@
+# --method specter2: the base packages plus the SPECTER2 embedding stack.
+#   pip install -r requirements-specter2.txt
+# On Linux, install the CPU build of torch first, or pip pulls 2-3 GB of CUDA (see README).
+-r requirements.txt
+torch
+transformers
+adapters

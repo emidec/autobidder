@@ -35,15 +35,20 @@ locally — no submission data leaves your machine.
 ## How to use autobidder
 
 ```bash
-pip install scikit-learn pypdf
+pip install -r requirements.txt            # scikit-learn + pypdf
 ```
 
-Two of the three [matching methods](#matching-methods) need one more package each:
+Two of the three [matching methods](#matching-methods) need more. Each has its own file, which
+includes the base packages:
 
 ```bash
-pip install sentence-transformers          # for --method rerank
-pip install torch transformers adapters    # for --method specter2
+pip install -r requirements-rerank.txt     # for --method rerank    (sentence-transformers)
+pip install -r requirements-specter2.txt   # for --method specter2  (torch transformers adapters)
 ```
+
+Want both methods in one environment? Install them in a single command, not one after the other —
+see [Requirements](#requirements) for why.
+
 On **Linux**, do this first or pip install sentence-transformer will pull 2GB+ of CUDA you may not need — see
 [Requirements](#requirements):
 
@@ -78,9 +83,9 @@ python3 make_topic_interests.py revprefs.csv
 against your papers — only that step differs, so bids stay comparable across methods:
 
 ```bash
-python3 score_bids.py revprefs.csv                      # tfidf (default): shared wording, nothing to install
-python3 score_bids.py revprefs.csv --method specter2    # meaning, not just wording  (+ torch transformers adapters)
-python3 score_bids.py revprefs.csv --method rerank      # most precise, reads pairs  (+ sentence-transformers, beta)
+python3 score_bids.py revprefs.csv                      # tfidf (default): shared wording, nothing more to install
+python3 score_bids.py revprefs.csv --method specter2    # meaning, not just wording  (+ requirements-specter2.txt)
+python3 score_bids.py revprefs.csv --method rerank      # most precise, reads pairs  (+ requirements-rerank.txt, beta)
 ```
 
 `specter2` and `rerank` download their model once, then run offline — see
@@ -278,6 +283,7 @@ More than you want to wait for? Stop it and lower `--rerank-frac`.
 | `score_bids.py` | Scores submissions by similarity to your papers (+ interests) and fills the bids. |
 | `fetch_models.py` | Pre-downloads the `specter2` / `rerank` models so a scoring run never stalls on it. |
 | `config.yaml` | Scoring parameters. Edit to taste. |
+| `requirements*.txt` | What to `pip install`: the base packages, plus one file each for `rerank` and `specter2`. |
 | `topic_interests.csv` | **you edit** — `topic,interest` on a **-2..2** scale. Made by `make_topic_interests.py`; each run reports unrated tags and unparsable values. |
 | `papers_pdf/` | your papers as PDFs (**≥5 unique, with a text layer**) — matched semantically against each submission. |
 | `revprefs.csv` | the round's submissions (HotCRP export). Deleted once scored, unless `--keep-original`. |
@@ -305,16 +311,27 @@ read before it's overwritten. The first run just notes there's nothing to compar
 
 | Package | When | Install |
 |---|---|---|
-| `scikit-learn` | always | `pip install scikit-learn pypdf` |
+| `scikit-learn` | always | `pip install -r requirements.txt` |
 | `pypdf` | always | *(same command)* |
 | `PyYAML` | optional — `config.yaml` has a built-in fallback parser without it | `pip install PyYAML` |
-| `sentence-transformers` | `--method rerank` | `pip install sentence-transformers` |
+| `sentence-transformers` | `--method rerank` | `pip install -r requirements-rerank.txt` |
 | `torch` | `--method rerank` and `--method specter2` | pulled in by either — see the warning below |
 | `transformers` | `--method rerank` and `--method specter2` | pulled in by `sentence-transformers`; explicit for `specter2` |
-| `adapters` | `--method specter2` | `pip install torch transformers adapters` |
+| `adapters` | `--method specter2` | `pip install -r requirements-specter2.txt` |
 
-`sentence-transformers` pulls `torch` and `transformers` even though its command doesn't name them,
+`sentence-transformers` pulls `torch` and `transformers` even though its file doesn't name them,
 which is how the CUDA download below catches people out.
+
+> ⚠️ **Both methods in one environment: install them together.** `adapters` pins `transformers` to a
+> 4.x release, while the newest `sentence-transformers` needs 5.x (as of `adapters` 1.3.0 and
+> `sentence-transformers` 6.3.0). Installed one after the other, the second changes `transformers`
+> underneath the first and breaks it. In a single command, pip picks versions that suit both:
+>
+> ```bash
+> pip install -r requirements-rerank.txt -r requirements-specter2.txt
+> ```
+>
+> Or keep one virtual environment per method.
 
 > ⚠️ **Linux: `torch` defaults to the CUDA build.** pip serves it whether or not you own an NVIDIA
 > GPU, dragging in a dozen `nvidia-*` packages totaling **2–3 GB**. To get the CPU build instead, run
