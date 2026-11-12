@@ -24,26 +24,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from score_bids import (DEFAULT_RERANK_MODEL, RERANK_MAX_LENGTH,   # noqa: E402
-                        SPECTER2_ADAPTER, SPECTER2_MODEL)
+                        SPECTER2_ADAPTER, SPECTER2_MODEL, cached_repos, hf_cache_dir)
 
 APPROX_SIZE = {"rerank": "~2.3 GB", "specter2": "~0.5 GB + adapter"}
-
-
-def hf_cache_dir():
-    home = os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
-    return os.path.join(home, "hub")
-
-
-def cached_repos():
-    """Repo ids already in the HuggingFace cache, as {'org/name', ...}."""
-    hub = hf_cache_dir()
-    if not os.path.isdir(hub):
-        return set()
-    out = set()
-    for name in os.listdir(hub):
-        if name.startswith("models--"):
-            out.add(name[len("models--"):].replace("--", "/"))
-    return out
 
 
 def report(repos, cached):

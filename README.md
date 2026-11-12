@@ -218,6 +218,11 @@ Models go to the shared HuggingFace cache (`~/.cache/huggingface`, or `HF_HOME`)
 `score_bids.py` looks. `--check` exits non-zero if anything is missing, so it works in a pre-flight
 script.
 
+Offline is enforced rather than assumed: once the models a run needs are in the cache, the run switches
+the HuggingFace libraries to offline mode (`HF_HUB_OFFLINE=1`), so they can't contact the Hub even to
+check for updates. If a cached model then fails to load — an interrupted download, usually — the run
+stops and tells you to re-run with `HF_HUB_OFFLINE=0`, which lets it fetch what's missing.
+
 **`specter2`** uses AllenAI SPECTER2, trained specifically for paper-to-paper similarity. Embeddings
 are cached in `.specter2_cache.npz` keyed by the text they came from, so re-runs only embed what's new
 — a fully-cached re-run doesn't even load the model. Override the path with `--emb-cache`.

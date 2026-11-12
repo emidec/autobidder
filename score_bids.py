@@ -418,6 +418,80 @@ RERANK_MAX_FRAC = 0.5            # past this the shortlist isn't one; specter2 f
 RERANK_MAX_LENGTH = 1024
 
 
+def hf_cache_dir():
+    """Where HuggingFace keeps downloaded models: HF_HUB_CACHE, else the hub folder in HF_HOME."""
+    hub = os.environ.get("HF_HUB_CACHE")
+    if hub:
+        return hub
+    home = os.environ.get("HF_HOME") or os.path.join(
+        os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache"),
+        "huggingface")
+    return os.path.join(home, "hub")
+
+
+def cached_repos():
+    """Repo ids whose download finished, as {'org/name', ...}.
+
+    A repo counts once it has a snapshot and no blob still marked .incomplete, which is what an
+    interrupted download leaves behind.
+    """
+    hub = hf_cache_dir()
+    if not os.path.isdir(hub):
+        return set()
+    out = set()
+    for name in os.listdir(hub):
+        if not name.startswith("models--"):
+            continue
+        repo = os.path.join(hub, name)
+        snapshots, blobs = os.path.join(repo, "snapshots"), os.path.join(repo, "blobs")
+        if not (os.path.isdir(snapshots) and os.listdir(snapshots)):
+            continue
+        if os.path.isdir(blobs) and any(b.endswith(".incomplete") for b in os.listdir(blobs)):
+            continue
+        out.add(name[len("models--"):].replace("--", "/"))
+    return out
+
+
+def _hub_offline():
+    return os.environ.get("HF_HUB_OFFLINE", "").strip().upper() in ("1", "ON", "YES", "TRUE")
+
+
+def _hub_offline_if_cached(repos):
+    """Put the HuggingFace libraries in offline mode when every model this run needs is cached.
+
+    Asking a loader for local files only is a request, and not every library version honors it
+    everywhere: sentence-transformers 5.x still asks the Hub about one file. HF_HUB_OFFLINE is
+    the switch they all obey. They read it once, on import, so this has to run before the first
+    of them is imported. A value you set yourself is left alone, and nothing is set while a model
+    is missing, so the first run still downloads.
+    """
+    if "HF_HUB_OFFLINE" not in os.environ and set(repos) <= cached_repos():
+        os.environ["HF_HUB_OFFLINE"] = "1"
+
+
+def _offline_first(load, what):
+    """Load a HuggingFace model from the local cache alone; use the network only if that fails.
+
+    A cached model otherwise still asks the Hub whether it is current on every load, so a run
+    isn't offline even though it downloads nothing. load(local_only) does the loading. When the
+    cache doesn't hold everything, it is called again with the network allowed -- the one-time
+    download -- and a failure that isn't about the cache simply surfaces from that second call.
+    In offline mode there is no second call to make, so the run stops and says how to allow one.
+    """
+    try:
+        return load(True)
+    except Exception as e:
+        if _hub_offline():
+            sys.exit("ERROR: %s couldn't be loaded from the local HuggingFace cache (%s: %s), and "
+                     "offline mode rules out fetching it.\nIf a download was interrupted, re-run "
+                     "with HF_HUB_OFFLINE=0 in front of the command to fetch what's missing."
+                     % (what, type(e).__name__, " ".join(str(e).split())[:200]))
+        sys.stderr.write("  %s isn't fully in the local cache - fetching it (one-time, needs "
+                         "network)...\n" % what)
+        sys.stderr.flush()
+        return load(False)
+
+
 def _topk_mean(sim, k=3):
     """Per-submission similarity as the mean of its top-k paper cosines, not the single
     max: a submission must match a sub-area of your work rather than one fluke neighbor
@@ -536,8 +610,10 @@ def _specter2_scores(paper_texts, sub_pairs, cache_path=DEFAULT_EMB_CACHE):
     abstracts are embedded only once across runs (a fully-cached re-run never loads the model).
     The profile's top-terms summary is still derived from TF-IDF so the saved JSON stays readable.
     """
+    _hub_offline_if_cached([SPECTER2_MODEL, SPECTER2_ADAPTER])       # before the imports below
     try:
         import torch
+        from huggingface_hub import snapshot_download
         from transformers import AutoTokenizer
         try:
             from adapters import AutoAdapterModel                 # adapters >= 0.x
@@ -570,10 +646,18 @@ def _specter2_scores(paper_texts, sub_pairs, cache_path=DEFAULT_EMB_CACHE):
         if todo and model is None:
             sys.stderr.write("Loading SPECTER2 (%s)...\n" % SPECTER2_MODEL)
             sys.stderr.flush()
-            tok = AutoTokenizer.from_pretrained(SPECTER2_MODEL)
-            model = AutoAdapterModel.from_pretrained(SPECTER2_MODEL)
-            name = model.load_adapter(SPECTER2_ADAPTER, source="hf", load_as="proximity", set_active=True)
-            model.set_active_adapters(name or "proximity")   # ensure the adapter runs in forward()
+
+            def load(local_only):
+                t = AutoTokenizer.from_pretrained(SPECTER2_MODEL, local_files_only=local_only)
+                m = AutoAdapterModel.from_pretrained(SPECTER2_MODEL, local_files_only=local_only)
+                # load_adapter has no local-only switch, so hand it the cached snapshot's folder
+                adapter = (snapshot_download(SPECTER2_ADAPTER, local_files_only=True)
+                           if local_only else SPECTER2_ADAPTER)
+                name = m.load_adapter(adapter, source="hf", load_as="proximity", set_active=True)
+                m.set_active_adapters(name or "proximity")   # ensure the adapter runs in forward()
+                return t, m
+
+            tok, model = _offline_first(load, "SPECTER2")
             model.eval()
         done = 0
         for s in range(0, len(todo), batch):
@@ -622,6 +706,7 @@ def _rerank_scores(paper_texts, sub_pairs, topn, model_id=DEFAULT_RERANK_MODEL,
     ABOVE the non-candidates, which keep their TF-IDF order. The downstream normalize step only
     cares about ordering, so this is all that's needed to keep the two scores from fighting.
     """
+    _hub_offline_if_cached([model_id])                               # before the import below
     try:
         from sentence_transformers import CrossEncoder
     except Exception:
@@ -656,7 +741,8 @@ def _rerank_scores(paper_texts, sub_pairs, topn, model_id=DEFAULT_RERANK_MODEL,
         pap_texts.append((pt + ". " + pa) if pa else " ".join(raw.split()))
     sys.stderr.write("Loading reranker (%s)...\n" % model_id)
     sys.stderr.flush()
-    ce = CrossEncoder(model_id, max_length=max_length)
+    ce = _offline_first(lambda local_only: CrossEncoder(model_id, max_length=max_length,
+                                                         local_files_only=local_only), model_id)
     ce.model.eval()                                                         # deterministic forward pass
     pairs = [(pap_texts[p], sub_texts[i]) for i in cand for p in range(len(pap_texts))]
     logits = ce.predict(pairs, batch_size=32, convert_to_numpy=True,

@@ -9,6 +9,7 @@ Most of the scoring is pure functions, which is what this leans on. load_config 
 config into module globals, so setUpModule loads it once for the whole suite.
 """
 
+import contextlib
 import csv
 import io
 import math
@@ -18,6 +19,7 @@ import sys
 import tempfile
 import unittest
 import warnings
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -349,6 +351,109 @@ class MakeTopicInterests(unittest.TestCase):
                       fields=("paper", "title", "preference", "abstract", "extra"))
         with self.assertRaises(SystemExit):
             mti.topics_from_csv(p)
+
+
+class OfflineFirst(unittest.TestCase):
+    """A cached model loads without the network; only a cache miss goes online."""
+
+    def test_cached_model_never_goes_online(self):
+        calls = []
+
+        def load(local_only):
+            calls.append(local_only)
+            return "model"
+
+        self.assertEqual("model", sb._offline_first(load, "m"))
+        self.assertEqual([True], calls)
+
+    def test_cache_miss_retries_with_the_network(self):
+        calls = []
+
+        def load(local_only):
+            calls.append(local_only)
+            if local_only:
+                raise OSError("not in the local cache")
+            return "model"
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual("model", sb._offline_first(load, "some/model"))
+        self.assertEqual([True, False], calls)
+        self.assertIn("some/model", err.getvalue())
+
+    def test_a_failure_with_the_network_allowed_surfaces(self):
+        def load(local_only):
+            raise RuntimeError("broken either way")
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(RuntimeError):
+                sb._offline_first(load, "m")
+
+    def test_offline_mode_stops_instead_of_retrying(self):
+        # with the Hub switched off there is nothing a second call could fetch
+        calls = []
+
+        def load(local_only):
+            calls.append(local_only)
+            raise OSError("a file is missing")
+
+        with mock.patch.dict(os.environ, {"HF_HUB_OFFLINE": "1"}):
+            with self.assertRaises(SystemExit) as stop:
+                sb._offline_first(load, "some/model")
+        self.assertEqual([True], calls)
+        self.assertIn("some/model", str(stop.exception))
+        self.assertIn("a file is missing", str(stop.exception))
+        self.assertIn("HF_HUB_OFFLINE=0", str(stop.exception))
+
+
+class HubOfflineMode(unittest.TestCase):
+    """Offline mode is switched on only when every model the run needs has finished downloading."""
+
+    def setUp(self):
+        self.hub = tempfile.mkdtemp()
+        env = {k: v for k, v in os.environ.items() if k != "HF_HUB_OFFLINE"}
+        env["HF_HUB_CACHE"] = self.hub
+        patcher = mock.patch.dict(os.environ, env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _repo(self, repo_id, snapshot=True, incomplete=False):
+        root = os.path.join(self.hub, "models--" + repo_id.replace("/", "--"))
+        os.makedirs(os.path.join(root, "blobs"))
+        os.makedirs(os.path.join(root, "snapshots", "abc123") if snapshot
+                    else os.path.join(root, "snapshots"))
+        write(os.path.join(root, "blobs", "0f0f.incomplete" if incomplete else "0f0f"), "x")
+
+    def test_on_when_everything_is_cached(self):
+        self._repo("org/a")
+        self._repo("org/b")
+        sb._hub_offline_if_cached(["org/a", "org/b"])
+        self.assertEqual("1", os.environ.get("HF_HUB_OFFLINE"))
+
+    def test_off_while_a_model_is_missing(self):
+        self._repo("org/a")
+        sb._hub_offline_if_cached(["org/a", "org/b"])
+        self.assertNotIn("HF_HUB_OFFLINE", os.environ)
+
+    def test_off_for_an_interrupted_download(self):
+        self._repo("org/a", incomplete=True)
+        self._repo("org/b", snapshot=False)
+        self.assertEqual(set(), sb.cached_repos())
+        sb._hub_offline_if_cached(["org/a"])
+        self.assertNotIn("HF_HUB_OFFLINE", os.environ)
+
+    def test_your_own_setting_is_left_alone(self):
+        self._repo("org/a")
+        os.environ["HF_HUB_OFFLINE"] = "0"
+        sb._hub_offline_if_cached(["org/a"])
+        self.assertEqual("0", os.environ["HF_HUB_OFFLINE"])
+        self.assertFalse(sb._hub_offline())
+
+    def test_cache_folder_follows_the_huggingface_variables(self):
+        self.assertEqual(self.hub, sb.hf_cache_dir())
+        del os.environ["HF_HUB_CACHE"]
+        os.environ["HF_HOME"] = "/somewhere/hf"
+        self.assertEqual(os.path.join("/somewhere/hf", "hub"), sb.hf_cache_dir())
 
 
 class ColumnValidation(unittest.TestCase):
