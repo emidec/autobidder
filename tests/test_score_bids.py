@@ -352,6 +352,23 @@ class MakeTopicInterests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             mti.topics_from_csv(p)
 
+    def test_next_step_names_the_files_actually_used(self):
+        # HotCRP names its export <conference>-revprefs.csv, so the command to run next has to
+        # carry that name -- both on screen and in the header of the file being edited.
+        p = write_csv(os.path.join(self.dir, "conf2027-revprefs.csv"),
+                      [{"paper": "1", "title": "T", "preference": "", "abstract": "a",
+                        "topics": "Privacy;Systems"}])
+        out = os.path.join(self.dir, "ti.csv")
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            mti.main([p, "-o", out])
+        with io.open(out, encoding="utf-8") as fh:
+            written = fh.read()
+        for text in (printed.getvalue(), written):
+            self.assertIn("conf2027-revprefs.csv", text)
+            self.assertNotIn("score_bids.py revprefs.csv", text)
+        self.assertEqual({"Privacy": 0, "Systems": 0}, dict(sb.read_topic_interests(out)))
+
 
 class OfflineFirst(unittest.TestCase):
     """A cached model loads without the network; only a cache miss goes online."""

@@ -25,6 +25,7 @@ Standard library only.
 import argparse
 import csv
 import os
+import shlex
 import sys
 
 # Written verbatim (as # comments, which score_bids.py ignores) at the top of the file,
@@ -35,8 +36,17 @@ SCALE_HEADER = [
     "# INTEREST: an integer from -2 to 2.",
     "#   2 = very high     1 = high     0 = neutral     -1 = low     -2 = very low",
     "# Edit the 'interest' column (leave 0 for neutral), then run:",
-    "#   python3 score_bids.py revprefs.csv --topic-interests topic_interests.csv",
 ]
+
+
+def score_command(csv_path, output):
+    """The next command to run, naming the files actually used.
+
+    HotCRP calls its export <conference>-revprefs.csv, so a fixed 'revprefs.csv' here would be
+    a command that fails when pasted.
+    """
+    return "python3 score_bids.py %s --topic-interests %s" % (shlex.quote(csv_path),
+                                                              shlex.quote(output))
 
 
 def topics_from_csv(path):
@@ -83,9 +93,11 @@ def main(argv=None):
     if not topics:
         sys.exit("ERROR: no topics found in the 'topics' column of %s." % args.csv)
 
+    next_step = score_command(args.csv, args.output)
     with open(args.output, "w", newline="", encoding="utf-8") as fh:
         for line in SCALE_HEADER:
             fh.write(line + "\n")
+        fh.write("#   %s\n" % next_step)
         w = csv.writer(fh)
         w.writerow(["topic", "interest"])
         for t in topics:
@@ -93,7 +105,7 @@ def main(argv=None):
 
     print("Wrote %s - %d topics, all at 0 (neutral)." % (args.output, len(topics)))
     print("INTEREST: -2 very low / -1 low / 0 neutral / 1 high / 2 very high.")
-    print("Edit the 'interest' column, then:  python3 score_bids.py revprefs.csv --topic-interests %s" % args.output)
+    print("Edit the 'interest' column, then:  %s" % next_step)
 
 
 if __name__ == "__main__":

@@ -101,7 +101,8 @@ By default this bids positively on ~10% of papers. You can change this with `--p
 listing every submission with a preference box. Select all papers and use the page's **Download**
 action → *Preference file with abstracts*. If you don’t see this, you will probably see a download *Review preference* or *Preference file*, and you should be able to add to the default columns `paper, title, preference`, by adding columns **abstract**
 and **topics** columns to the view first (the **Show** menu / column options on the search bar → enable
-*Abstract* and *Topics*), and then download. Save it as `revprefs.csv`.
+*Abstract* and *Topics*), and then download. Save it as `revprefs.csv` — or keep the name HotCRP gives
+it, `<conference>-revprefs.csv`, and pass that to the commands instead.
 
 `score_bids.py` checks the columns before it does anything else:
 
