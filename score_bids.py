@@ -30,6 +30,7 @@ HOW A BID IS COMPUTED (parameters in config.yaml)
 
 By default the abstract-laden input is deleted and an abstract-free scored CSV is written;
 --keep-original keeps it. At least 5 unique PDFs with extractable text in papers_pdf/ are required.
+An export with no abstract column stops the run unless you pass --title-only.
 
 Dependencies: scikit-learn (pip install scikit-learn) and pypdf (pip install pypdf).
 PyYAML is optional (config.yaml has a built-in fallback parser).
@@ -984,7 +985,7 @@ def make_change_summary(prev_path, prev, rows, profile_path=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Score submissions by similarity to your papers (+ topic interests), and fill bids.")
-    ap.add_argument("input", help="preferences CSV (paper,title,preference[,abstract,topics])")
+    ap.add_argument("input", help="preferences CSV (paper,title,preference,abstract[,topics])")
     ap.add_argument("--topic-interests", dest="topic_interests", default="topic_interests.csv",
                     help="your topic,interest CSV in [-2,2] (default: topic_interests.csv)")
     ap.add_argument("--pdfs", default=DEFAULT_PDF_DIR,
@@ -1022,6 +1023,9 @@ def main(argv=None):
                     "abstracts removed; the timestamp keeps re-runs from overwriting)")
     ap.add_argument("--keep-original", dest="keep_original", action="store_true",
                     help="keep the input CSV (by default it is deleted once the scored output is written)")
+    ap.add_argument("--title-only", dest="title_only", action="store_true",
+                    help="accept an export with no 'abstract' column and match on titles alone "
+                         "(much weaker; without this flag such an export stops the run)")
     ap.add_argument("--report", help="also write the text report to this path")
     ap.add_argument("--quiet", action="store_true", help="don't print the report")
     args = ap.parse_args(argv)
@@ -1064,14 +1068,24 @@ def main(argv=None):
     mode = "abstract+topics" if (has_abstract and has_topics) else \
            ("abstract" if has_abstract else ("topics" if has_topics else "title-only"))
     if not has_abstract:
-        sys.stderr.write("WARNING: no 'abstract' column - matching on titles alone, which is much "
-                         "weaker. Re-export with the abstract column for a real match.\n")
+        # HotCRP's plain "Preference file" download has no abstracts, and it is the easy one to
+        # pick by mistake -- so a title-only round has to be asked for, not fallen into.
+        if not args.title_only:
+            ap.error("input has no 'abstract' column, so it could only be matched on titles. "
+                     "That is HotCRP's plain 'Preference file': download 'Preference file with "
+                     "abstracts' instead (README: The HotCRP round trip), or pass --title-only "
+                     "to match on titles anyway, which is much weaker.")
+        sys.stderr.write("WARNING: no 'abstract' column - matching on titles alone "
+                         "(--title-only), which is much weaker.\n")
     if not has_topics:
         sys.stderr.write("WARNING: no 'topics' column - your topic interests can't be applied, so "
                          "%.0f%% of every score is a constant 0. Re-export with the topics "
                          "column.\n" % (100 * INTEREST_WEIGHT))
 
-    interests = read_topic_interests(args.topic_interests)          # required input
+    # Required whenever there are topics to apply it to. Without a topics column the file has
+    # nothing to steer, and make_topic_interests.py couldn't have built it from this export.
+    interests = (read_topic_interests(args.topic_interests) if has_topics
+                 else collections.OrderedDict())
     report_topic_coverage(rows, interests)
     pdfs = require_pdfs(args.pdfs, MIN_UNIQUE_PDFS)                  # >=5 unique files
 

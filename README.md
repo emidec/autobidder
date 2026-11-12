@@ -109,11 +109,12 @@ and **topics** columns to the view first (the **Show** menu / column options on 
 |---|---|
 | `paper` | **required** — HotCRP matches rows by paper id on upload, so an export without it can't be uploaded at all |
 | `preference` | **required** — this is the column that gets filled in |
-| `abstract` | strongly wanted — without it, matching falls back to titles alone |
+| `abstract` | **required**, unless you pass `--title-only` — without it, matching falls back to titles alone |
 | `topics` | strongly wanted — without it your interests can't be applied, leaving `interest_weight` of every score a constant 0 |
 
-The run warns when `abstract` or `topics` is missing rather than failing, so a title-only round is
-possible — just much weaker.
+A missing `abstract` column **stops the run**: it means you downloaded the plain *Preference file*
+rather than *Preference file with abstracts*. Pass `--title-only` to score on titles anyway — possible,
+just much weaker. A missing `topics` column only warns, and `topic_interests.csv` isn't needed then.
 
 **Upload.** Upload the scored CSV on the same **Review preferences** page via its **Upload** action (or
 **Assignments → Upload**). HotCRP matches each row by its `paper` id and reads the `preference` column;
@@ -143,6 +144,7 @@ the other columns are ignored.
 |---|---|---|
 | `--positive-frac F` | `0.1` | Fraction of papers to bid positively on (0–1). See below. |
 | `--keep-original` | off | Don't delete the input CSV after scoring. |
+| `--title-only` | off | Accept an export with no `abstract` column and match on titles alone. Without it, such an export stops the run. |
 | `--method M` | `tfidf` | Similarity method: `tfidf`, `specter2`, or `rerank`. See [Matching methods](#matching-methods). |
 | `-o`, `--output PATH` | timestamped | Output CSV path. |
 | `--report PATH` | — | Also write the histogram report to a file. |

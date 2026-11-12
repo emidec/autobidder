@@ -463,14 +463,35 @@ class ColumnValidation(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         write(os.path.join(self.dir, "topic_interests.csv"), "topic,interest\nPrivacy,1\n")
 
-    def _run(self, name, fields):
+    def _run(self, name, fields, *extra):
         rows = [{"paper": str(i), "title": "T%d" % i, "preference": "",
                  "abstract": "privacy attack %d gradient" % i, "topics": "Privacy"}
                 for i in range(10)]
         path = write_csv(os.path.join(self.dir, name), rows, fields=fields)
         return subprocess.run([sys.executable, os.path.join(ROOT, "score_bids.py"), path,
-                               "--keep-original", "--quiet"],
+                               "--keep-original", "--quiet"] + list(extra),
                               cwd=self.dir, capture_output=True, text=True)
+
+    def test_missing_abstract_column_stops_the_run(self):
+        r = self._run("no_abstract.csv", ("paper", "title", "preference", "topics"))
+        self.assertNotEqual(0, r.returncode)
+        self.assertIn("Preference file with abstracts", r.stderr)
+        self.assertIn("--title-only", r.stderr)
+
+    def test_title_only_accepts_the_plain_export(self):
+        # HotCRP's plain export has no abstracts and no topics -- so there is no interests file
+        # either, since make_topic_interests.py can't build one from it.
+        os.remove(os.path.join(self.dir, "topic_interests.csv"))
+        r = self._run("plain.csv", ("paper", "title", "preference"), "--title-only")
+        self.assertIn("titles alone", r.stderr)
+        self.assertNotIn("topic interests file not found", r.stderr)
+        self.assertIn("PDF folder not found", r.stderr)      # the check after the columns
+
+    def test_interests_file_is_still_required_with_a_topics_column(self):
+        os.remove(os.path.join(self.dir, "topic_interests.csv"))
+        r = self._run("full.csv", ("paper", "title", "preference", "abstract", "topics"))
+        self.assertNotEqual(0, r.returncode)
+        self.assertIn("topic interests file not found", r.stderr)
 
     def test_missing_paper_column_is_an_error(self):
         r = self._run("no_paper.csv", ("title", "preference", "abstract", "topics"))
