@@ -211,14 +211,17 @@ to `--rerank-max-length` tokens, while SPECTER2 is a ~110M-parameter model readi
 Attention is quadratic in length, so a rerank pass costs an order of magnitude more than a SPECTER2 one
 on top of there being more of them.
 
-A round of **1,000 submissions** with **10 papers**, at the default `--positive-frac 0.1` (so
-`R = 0.2`):
+A round of **~500 submissions** with **14 papers**, at `--positive-frac 0.25` (so `R = 0.35`):
 
-| | forward passes | | on an M-series Mac |
+| | forward passes | | on an M5 MacBook Pro |
 |---|---|---|---|
 | `tfidf` | 0 | | seconds |
-| `specter2` | `1000 + 10` | = 1,010 | about a minute, then cached |
-| `rerank` | `0.2 × 1000 × 10` | = 2,000 | **about 45 minutes** |
+| `specter2` | `500 + 14` | = 514 | about half a minute, then cached |
+| `rerank` | `0.35 × 500 × 14` | = 2,450 | **5–10 minutes** |
+
+The `rerank` and `specter2` figures are measured: `rerank` took 6–7 minutes for 2,016 pairs (410
+submissions × 14 papers), and `specter2` took 33 seconds for 514 texts. `rerank` time scales with the
+pair count, so fewer papers or a lower `--positive-frac` shorten it in proportion.
 
 `specter2` and `rerank` each download their model once, then run offline and deterministically —
 fetch them up front with `fetch_models.py` (see [How to use autobidder](#how-to-use-autobidder)).
@@ -419,7 +422,7 @@ Parameters live in `config.yaml`.
 2. **Normalize.** Cosine similarities are small, bunched, and skewed (TF-IDF piles near zero; SPECTER2
    sits high even for unrelated papers), so each submission is **rank/quantile-transformed** across the
    pool onto a ±`ref_max` range — "where does this rank among your matches this year." `sem_spread` shapes
-   the curve (9 = linear; higher pushes mid-rank papers toward the extremes). Unlike a z-score, this
+   the curve (1 = linear; higher pushes mid-rank papers toward the extremes). Unlike a z-score, this
    doesn't depend on the pool's spread, so the blend in step 3 behaves the same across venues.
 3. **Blend with interests.** `(1 − interest_weight)·similarity + interest_weight·topic`, where `topic` is
    `0.6·max + 0.4·mean` of your −2..2 interests (×10) for the submission's topic tags. Default
@@ -437,10 +440,9 @@ papers are parsed down to their own title+abstract, falling back to the raw page
 abstract parses, rather than being fed the three-page read.
 
 **`rerank`** shortlists the top-N submissions by TF-IDF, then scores each candidate against your papers
-with the cross-encoder and aggregates with a top-3 mean. The shortlist size auto-scales as
-`max(150, 3 × --positive-frac × pool size)`, so it always covers the positive bid band — reranked
-candidates sort above the rest, so a positive bid could otherwise land on a paper the cross-encoder
-never saw. TF-IDF cosines and cross-encoder logits aren't comparable, so they're never compared: each
+with the cross-encoder and aggregates with a top-3 mean. The shortlist is `--rerank-frac` of the pool —
+by default `--positive-frac` + 0.10 — so it always covers the positive bid band: reranked candidates
+sort above the rest, so a positive bid could otherwise land on a paper the cross-encoder never saw. TF-IDF cosines and cross-encoder logits aren't comparable, so they're never compared: each
 group is rank-transformed within itself and the reranked candidates are placed as a band strictly above
 the non-candidates, which keep their TF-IDF order. The normalize/blend/map steps then run unchanged.
 
