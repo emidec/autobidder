@@ -494,16 +494,24 @@ rerank pass costs an order of magnitude more than a SPECTER2 one on top of there
 
 ### Benchmarks
 
-Measured on a real round: **~2,000 submissions × 12 papers**, at the default `--positive-frac 0.1`
+Measured on a real round of ~2,000 submissions × 12 papers, at the default `--positive-frac 0.1`
 (so `R = 0.2`). Every machine used the same inputs. Each run timed one method on one device, so no
 two runs shared the hardware.
 
-| | forward passes | TITAN X (Pascal) | GTX 1080 Ti | RTX PRO 6000 Blackwell | M5 GPU (MPS) | M5 CPU | Linux server CPU |
-|---|---|---|---|---|---|---|---|
-| `tfidf` | 0 | | | | | 1 s | 5 s |
-| `specter2` | `2,000 + 12` ≈ 2,000 | 56 s | 55 s | 18 s | 1 min 14 s | 2 min 30 s | 4 min 40 s |
-| `specter2+scincl` | `2 × (2,000 + 12)` ≈ 4,000 | 1 min 45 s | 1 min 41 s | 38 s | 2 min 21 s | 5 min 00 s | 8 min 25 s |
-| `rerank` | `0.2 × 2,000 × 12` ≈ 4,800 | 10 min 19 s | 9 min 59 s | 1 min 25 s | 14 min 55 s | _pending_ | _pending_ |
+Times are wall-clock, in minutes:seconds, for a first run:
+
+| device | `specter2` | `specter2+scincl` | `rerank` |
+|---|--:|--:|--:|
+| RTX PRO 6000 Blackwell | 0:18 | 0:38 | 1:25 |
+| GTX 1080 Ti | 0:55 | 1:41 | 9:59 |
+| TITAN X (Pascal) | 0:56 | 1:45 | 10:19 |
+| Apple M5 GPU (MPS) | 1:14 | 2:21 | 14:55 |
+| Apple M5 CPU | 2:30 | 5:00 | _pending_ |
+| 2× Xeon E5-2630 v4 CPU | 4:40 | 8:25 | _pending_ |
+| forward passes | ≈ 2,000 | ≈ 4,000 | ≈ 4,800 |
+
+The forward passes follow the formulas above: `n + P`, `2 · (n + P)` and `R · n · P`. `tfidf` has no
+model and took 1–5 s on every machine.
 
 The machines:
 
@@ -511,14 +519,13 @@ The machines:
   (6 cores). torch 2.14, CUDA 12.6.
 - **RTX PRO 6000 Blackwell:** Server Edition, 96 GB, on a Slurm node with 8 cores of an AMD EPYC 9354
   allocated. torch 2.11, CUDA 12.8.
-- **M5:** a MacBook Pro, 4 performance + 6 efficiency cores, a 10-core GPU and 32 GB, on AC power.
+- **Apple M5:** a MacBook Pro, 4 performance + 6 efficiency cores, a 10-core GPU and 32 GB, on AC power.
   torch 2.15.
-- **Linux server:** a Dell PowerEdge R630 with two Xeon E5-2630 v4 (20 cores / 40 threads, 2016) and
+- **2× Xeon E5-2630 v4:** a Dell PowerEdge R630 server with two Xeon E5-2630 v4 (20 cores / 40 threads, 2016) and
   128 GB, no GPU. torch 2.15, CPU build, 20 threads.
 
-`tfidf` has no model, so it always runs on the CPU and takes a few seconds anywhere. The embedding
-methods' times are for a first run; re-runs read the cache. `rerank` time scales with the pair
-count, so fewer papers or a lower `--positive-frac` shorten it in proportion.
+Re-runs of the embedding methods read the cache and finish in seconds. `rerank` has no cache; its time
+scales with the pair count, so fewer papers or a lower `--positive-frac` shorten it in proportion.
 
 The current datacenter card runs `rerank` about 7× faster than the 2016 cards and `specter2` about
 3× faster. The embedding methods gain less because their runs are short, so loading the model and
