@@ -4,7 +4,7 @@ Fill in your HotCRP reviewer bids automatically. Rate the conference's topics on
 your own papers, and it scores every submission by how well it matches your work. Everything runs
 locally — no submission data leaves your machine.
 
-**Version:** `v0.5.0`.
+**Version:** `v1.0.1`.
 
 ---
 
