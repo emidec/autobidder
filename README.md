@@ -28,6 +28,7 @@ locally — no submission data leaves your machine.
   - [Scoring a submission](#scoring-a-submission)
 - [Performance](#performance)
   - [Benchmarks](#benchmarks)
+  - [Accuracy](#accuracy)
   - [Reproducibility](#reproducibility)
 - [Development](#development)
 - [Acknowledgments](#acknowledgments)
@@ -493,38 +494,98 @@ rerank pass costs an order of magnitude more than a SPECTER2 one on top of there
 
 ### Benchmarks
 
-Measured on a real round — **~2,200 submissions × 13 papers**, default `--positive-frac 0.1` (so
-`R = 0.2`) — on two 2016-era NVIDIA cards and their Linux machine's CPU, and on an M5 MacBook Pro's
-GPU (MPS) and CPU. Forward passes follow the formulas above.
+Measured on a real round: **~2,000 submissions × 12 papers**, at the default `--positive-frac 0.1`
+(so `R = 0.2`). Every machine used the same inputs. Each run timed one method on one device, so no
+two runs shared the hardware.
 
-| | forward passes | TITAN X (Pascal) | GTX 1080 Ti | Linux CPU | M5 GPU (MPS) | M5 CPU |
-|---|---|---|---|---|---|---|
-| `tfidf` | 0 | | | seconds | | seconds |
-| `specter2` | `2,200 + 13` ≈ 2,200 | 62 s | 61 s | 7 min 39 s | 1 min 19 s | 2 min 41 s |
-| `specter2+scincl` | `2 × (2,200 + 13)` ≈ 4,400 | 1 min 56 s | | | | |
-| `rerank` | `0.2 × 2,200 × 13` ≈ 5,700 | 11 min 58 s | 11 min 31 s | 2 h 01 min | 17 min 38 s | 40 min |
+| | forward passes | TITAN X (Pascal) | GTX 1080 Ti | RTX PRO 6000 Blackwell | M5 GPU (MPS) | M5 CPU | Linux server CPU |
+|---|---|---|---|---|---|---|---|
+| `tfidf` | 0 | | | | | 1 s | 5 s |
+| `specter2` | `2,000 + 12` ≈ 2,000 | 56 s | 55 s | 18 s | 1 min 14 s | 2 min 30 s | 4 min 40 s |
+| `specter2+scincl` | `2 × (2,000 + 12)` ≈ 4,000 | 1 min 45 s | 1 min 41 s | 38 s | 2 min 21 s | 5 min 00 s | 8 min 25 s |
+| `rerank` | `0.2 × 2,000 × 12` ≈ 4,800 | 10 min 19 s | 9 min 59 s | 1 min 25 s | 14 min 55 s | _pending_ | _pending_ |
 
-Blank cells were not measured: `specter2+scincl` was only timed on the TITAN X, and `tfidf` has no
-model, so it always runs on the CPU. The embedding methods' times are for a first run; re-runs read
-the cache. `rerank` time scales with the pair count, so fewer papers or a lower `--positive-frac`
-shorten it in proportion.
+The machines:
 
-A GPU pays off most where the CPU is weak: about 7–10× on that Linux box, but only about 2× on the M5,
-whose CPU is some 3× faster. Either NVIDIA card still beats the M5's GPU by about 1.5× on `rerank`.
+- **TITAN X and GTX 1080 Ti:** two 2016-era cards (12 / 11 GB) in a Linux desktop with an i7-6800K
+  (6 cores). torch 2.14, CUDA 12.6.
+- **RTX PRO 6000 Blackwell:** Server Edition, 96 GB, on a Slurm node with 8 cores of an AMD EPYC 9354
+  allocated. torch 2.11, CUDA 12.8.
+- **M5:** a MacBook Pro, 4 performance + 6 efficiency cores, a 10-core GPU and 32 GB, on AC power.
+  torch 2.15.
+- **Linux server:** a Dell PowerEdge R630 with two Xeon E5-2630 v4 (20 cores / 40 threads, 2016) and
+  128 GB, no GPU. torch 2.15, CPU build, 20 threads.
 
-Card memory is not a concern: `rerank` peaked under 5 GB.
+`tfidf` has no model, so it always runs on the CPU and takes a few seconds anywhere. The embedding
+methods' times are for a first run; re-runs read the cache. `rerank` time scales with the pair
+count, so fewer papers or a lower `--positive-frac` shorten it in proportion.
+
+The current datacenter card runs `rerank` about 7× faster than the 2016 cards and `specter2` about
+3× faster. The embedding methods gain less because their runs are short, so loading the model and
+reading the PDFs take up more of the total.
+
+Core count is not the whole story on a CPU. The M5's 4 performance cores embed nearly twice as fast
+as the server's 20 Xeon cores from 2016. The M5's GPU, in turn, is only about 2× faster than its own
+CPU.
+
+Memory is not a concern anywhere. `rerank` peaked at 4.5–5.1 GB of GPU memory and under 4 GB of RAM.
+Embedding on the M5's CPU peaked at 4.5 GB of RAM.
+
+### Accuracy
+
+There are no true bids to grade against, so the accuracy test uses the papers whose answer is
+known: your own. The test takes each of the 12 papers in turn and runs one round:
+
+1. It holds that paper out of the profile.
+2. It plants that paper's title and abstract among the ~2,000 submissions.
+3. It scores the pool against the other 11 papers.
+4. It records where the planted paper ranks.
+
+A good method puts it near the top. These are the results on the round above, using the semantic
+score alone (the planted paper has no topics):
+
+| | `tfidf` | `specter2` | `specter2+scincl` | `rerank` | random |
+|---|---|---|---|---|---|
+| median rank (of ~2,000) | **12** | 32 | 32 | 70 | ~1,000 |
+| mean percentile | **5.3%** | 12.6% | 14.8% | 9.4% | 50% |
+| mean reciprocal rank | **0.31** | 0.12 | 0.21 | 0.12 | ~0 |
+| in the top 1% | **7/12** | 6/12 | 6/12 | 4/12 | ~0 |
+| would get a positive bid (top 10%) | **10/12** | 7/12 | 7/12 | 7/12 | ~1 |
+
+Read this with three caveats:
+
+- **It flatters `tfidf`.** A held-out paper shares its author's own vocabulary with the rest of the
+  profile: system and dataset names, coined terms. `tfidf` matches those words exactly. Bidding needs
+  to find *other people's* papers in your area, and this test doesn't measure that.
+- **Off-profile papers rank badly everywhere.** A paper unlike the rest of its author's profile
+  ranks low under every method. That is a fact about the profile, not about the methods.
+- **It is a small sample.** With 12 papers, a difference of one or two in the counts is noise.
+
+The test is deterministic and gives the same ranks on any device. It took about 20 minutes on one
+2016 GPU, mostly `rerank`.
 
 ### Reproducibility
 
-Fully deterministic: same papers + same `topic_interests.csv` + same CSV → identical bids.
+Fully deterministic: the same papers, `topic_interests.csv` and CSV give identical bids.
 
-That holds across devices too, in practice: on the round above, `specter2` and `rerank` each gave
-identical bids on two CUDA GPUs and their machine's CPU, and on an M5's MPS GPU and CPU — on each
-machine, every device produced the same bid for every one of the ~2,200 papers. A GPU does round
-floating-point math differently from a CPU, so scores differ in their last digits; bids are integers
-set by rank, so a difference only shows if it swaps two submissions tied to that precision. If you
-need a guarantee rather than a measurement, pass `--device cpu` on every machine. The `specter2`
-embedding cache doesn't record the device, so a cache built on one is reused as-is on the other.
+**Across devices on one machine**, the bids were identical in every measurement above. Every method
+gave the same bid for every one of the ~2,000 submissions on both NVIDIA cards, and on the M5's GPU
+and CPU. A GPU rounds floating-point math differently from a CPU, so scores differ in their last
+digits. Bids are integers set by rank, so a difference only shows if it swaps two submissions that
+are tied to that precision.
+
+**Across machines**, the two NVIDIA machines and the CPU-only Linux server all matched each other
+exactly, for every method. That held despite different GPU generations (Pascal and Blackwell), GPU
+against CPU, and different torch and CUDA versions.
+
+The Mac did not match at first, because it had an older **pypdf** (7.0.1 against 7.1.1). The two
+versions pull slightly different text out of the same PDFs, so the profile changes. That shifted some
+bids by a few points, while the set of positive bids stayed almost the same. With the same
+pypdf version the bids were identical again. To get the same bids on several machines, install the
+same pypdf version on all of them.
+
+If you need a guarantee rather than a measurement, pass `--device cpu` on every machine. The
+embedding caches don't record the device, so a cache built on one device is reused as-is on another.
 
 ---
 
