@@ -28,7 +28,6 @@ locally — no submission data leaves your machine.
   - [Scoring a submission](#scoring-a-submission)
 - [Performance](#performance)
   - [Benchmarks](#benchmarks)
-  - [Accuracy](#accuracy)
   - [Reproducibility](#reproducibility)
 - [Development](#development)
 - [Acknowledgments](#acknowledgments)
@@ -537,39 +536,6 @@ CPU.
 
 Memory is not a concern anywhere. `rerank` peaked at 4.5–5.1 GB of GPU memory and under 4 GB of RAM.
 Embedding on the M5's CPU peaked at 4.5 GB of RAM.
-
-### Accuracy
-
-There are no true bids to grade against, so the accuracy test uses the papers whose answer is
-known: your own. The test takes each of the 12 papers in turn and runs one round:
-
-1. It holds that paper out of the profile.
-2. It plants that paper's title and abstract among the ~2,000 submissions.
-3. It scores the pool against the other 11 papers.
-4. It records where the planted paper ranks.
-
-A good method puts it near the top. These are the results on the round above, using the semantic
-score alone (the planted paper has no topics):
-
-| | `tfidf` | `specter2` | `specter2+scincl` | `rerank` | random |
-|---|---|---|---|---|---|
-| median rank (of ~2,000) | **12** | 32 | 32 | 70 | ~1,000 |
-| mean percentile | **5.3%** | 12.6% | 14.8% | 9.4% | 50% |
-| mean reciprocal rank | **0.31** | 0.12 | 0.21 | 0.12 | ~0 |
-| in the top 1% | **7/12** | 6/12 | 6/12 | 4/12 | ~0 |
-| would get a positive bid (top 10%) | **10/12** | 7/12 | 7/12 | 7/12 | ~1 |
-
-Read this with three caveats:
-
-- **It flatters `tfidf`.** A held-out paper shares its author's own vocabulary with the rest of the
-  profile: system and dataset names, coined terms. `tfidf` matches those words exactly. Bidding needs
-  to find *other people's* papers in your area, and this test doesn't measure that.
-- **Off-profile papers rank badly everywhere.** A paper unlike the rest of its author's profile
-  ranks low under every method. That is a fact about the profile, not about the methods.
-- **It is a small sample.** With 12 papers, a difference of one or two in the counts is noise.
-
-The test is deterministic and gives the same ranks on any device. It took about 20 minutes on one
-2016 GPU, mostly `rerank`.
 
 ### Reproducibility
 
