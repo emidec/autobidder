@@ -86,33 +86,19 @@ rest of the flags are in [Options](#options).
 
 ## The HotCRP round trip
 
-**Export.** HotCRP generally shows a **Review preferences** link on the home page, listing every
-submission with a preference box. Select all papers and use the page's **Download** action →
-*Preference file with abstracts*. It has to be that one: the plain *Preference file* beside it has
-only `paper, title, preference`, whatever columns the page is showing. Save the download as
-`revprefs.csv` — or keep the name HotCRP gives it, `<conference>-revprefs.csv`, and pass that to the
+**Export.** On HotCRP's **Review preferences** page, select all papers and choose **Download →
+Preference file with abstracts**. Save it as `revprefs.csv`, or pass HotCRP's own file name to the
 commands instead.
 
-`score_bids.py` checks the columns before it does anything else:
+It has to be *Preference file with abstracts*. The plain *Preference file* has no abstracts or
+topics. Without abstracts, `score_bids.py` stops (`--title-only` scores on titles alone, which is much
+weaker). Without topics, it warns and ignores your topic interests.
 
-| Column | |
-|---|---|
-| `paper` | **required** — HotCRP matches rows by paper id on upload, so an export without it can't be uploaded at all |
-| `preference` | **required** — this is the column that gets filled in |
-| `abstract` | **required**, unless you pass `--title-only` — without it, matching falls back to titles alone |
-| `topics` | strongly wanted — without it your topic interests can't be applied, so the `interest_weight` share of every score (35% by default) is a constant 0 |
+**Upload.** Upload the scored CSV on the same page with **Upload**, or under **Assignments → Upload**.
+HotCRP reads only the `paper` and `preference` columns.
 
-A missing `abstract` column **stops the run**: it means you downloaded the plain *Preference file*
-rather than *Preference file with abstracts*. Pass `--title-only` to score on titles anyway — possible,
-just much weaker. A missing `topics` column only warns, and `topic_interests.csv` isn't needed then.
-
-**Upload.** Upload the scored CSV on the same **Review preferences** page via its **Upload** action (or
-**Assignments → Upload**). HotCRP matches each row by its `paper` id and reads the `preference` column;
-the other columns are ignored.
-
-> Labels vary a little between HotCRP versions. If your site's controls differ, the rule is: get a CSV
-> that includes `paper, title, preference, abstract, topics`, and upload one with `paper` +
-> `preference`.
+Menu labels differ a little between HotCRP versions. Any export with `paper`, `title`,
+`preference`, `abstract` and `topics` columns works.
 
 ---
 
@@ -505,7 +491,7 @@ Times are wall-clock, in minutes:seconds, for a first run:
 | GTX 1080 Ti | 0:55 | 1:41 | 9:59 |
 | TITAN X (Pascal) | 0:56 | 1:45 | 10:19 |
 | Apple M5 GPU (MPS) | 1:14 | 2:21 | 14:55 |
-| Apple M5 CPU | 2:30 | 5:00 | _pending_ |
+| Apple M5 CPU | 2:30 | 5:00 | 34:18 |
 | 2× Xeon E5-2630 v4 CPU | 4:40 | 8:25 | _pending_ |
 | forward passes | ≈ 2,000 | ≈ 4,000 | ≈ 4,800 |
 
@@ -534,7 +520,8 @@ Core count is not the whole story on a CPU. The M5's 4 performance cores embed n
 as the server's 20 Xeon cores from 2016. The M5's GPU, in turn, is only about 2× faster than its own
 CPU.
 
-Memory is not a concern anywhere. `rerank` peaked at 4.5–5.1 GB of GPU memory and under 4 GB of RAM.
+Memory is not a concern anywhere. `rerank` peaked at 4.5–5.1 GB of GPU memory, and at 6 GB of RAM
+when run on a CPU.
 Embedding on the M5's CPU peaked at 4.5 GB of RAM.
 
 ### Reproducibility
