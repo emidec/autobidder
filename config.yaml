@@ -1,0 +1,31 @@
+# config.yaml - scoring parameters for score_bids.py
+#
+# Plain scalars. PyYAML is used if installed; otherwise score_bids.py parses this
+# flat key/value file with a built-in fallback (no third-party dependency needed).
+
+# ---- OUTPUT RANGE -----------------------------------------------------------
+# Bids are written to the CSV in [-bid_max, bid_max]. HotCRP preferences are integers.
+bid_max: 20
+bid_limit: 100          # validation ceiling (HotCRP allows up to |100|)
+
+# ---- SCORING ----------------------------------------------------------------
+# Internal reference span the score is computed on. It has NO effect on your bids: both
+# halves of the blend scale with it, and the final mapping to [-bid_max, bid_max] depends
+# only on the ordering, so any positive value gives identical output. Set bid_max, not this.
+ref_max: 20
+
+# How much your -2..2 topic interests steer the bid vs. semantic similarity to your
+# own papers. 0 = ignore interests (pure semantic), 1 = ignore papers (pure interests).
+interest_weight: 0.35
+
+# How sharply semantic similarity maps onto the score scale. Similarity is rank/quantile-
+# transformed across submissions onto +/-ref_max (robust, and independent of the pool's spread
+# so the blend with topic interests is stable across venues); sem_spread then shapes that curve.
+#
+#   1.0  linear -- no shaping (default)
+#   2.0  more separation between near-miss and on-target papers
+#   0.5  flatter, everything closer to neutral
+#
+# This changes how STRONG the bids are, not how many come out positive -- that is
+# --positive-frac. Allowed range 0.1 to 10.
+sem_spread: 1.0

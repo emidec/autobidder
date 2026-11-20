@@ -1,0 +1,5 @@
+# Base packages: everything --method tfidf (the default) needs.
+#   pip install -r requirements.txt
+# PyYAML is optional: config.yaml has a built-in fallback parser without it.
+scikit-learn
+pypdf
