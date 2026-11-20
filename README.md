@@ -74,6 +74,18 @@ python3 score_bids.py revprefs.csv --method rerank           # most precise, rea
 
 [Matching methods](#matching-methods) says what each one does.
 
+Or use `default-run.sh`, which runs `specter2+scincl` on whatever GPU there is (CUDA or Apple MPS, falling back to
+the CPU):
+
+```bash
+./default-run.sh                                    # specter2+scincl on the GPU
+./default-run.sh rerank                             # another method
+./default-run.sh specter2 cpu                       # another device: gpu, cpu, cuda:1, mps
+./default-run.sh rerank gpu revprefs.csv --keep-original   # anything after the file goes to score_bids.py
+```
+
+It uses `.venv/bin/python` if there is one, else `python3`; set `PYTHON=` to use another.
+
 **5.** Upload the `revprefs.scored.<timestamp>.csv` it wrote back to HotCRP. Done.
 
 > ⚠️ Step 4 **deletes `revprefs.csv`** — it holds every submission's abstract, and the scored output
@@ -335,6 +347,7 @@ miss exceeds 10 points.
 |---|---|
 | `make_topic_interests.py` | Creates a blank `topic_interests.csv` (every topic at 0) from the preferences CSV. Stdlib only. |
 | `score_bids.py` | Scores submissions by similarity to your papers (+ interests) and fills the bids. |
+| `default-run.sh` | Runs `score_bids.py` with `specter2+scincl` on the GPU by default; method, device and input file as arguments. |
 | `fetch_models.py` | Pre-downloads the models for `specter2`, `specter2+scincl` and `rerank` so a scoring run never stalls on it. |
 | `config.yaml` | Scoring parameters. Edit to taste. |
 | `requirements*.txt` | What to `pip install`: the base packages, plus one file each for `rerank` and the embedding methods (`requirements-specter2.txt`). |
