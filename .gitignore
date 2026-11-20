@@ -36,3 +36,4 @@ run.sh
 bench-*/
 benchmarks/
 *.zip
+.venv/
