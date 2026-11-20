@@ -492,7 +492,7 @@ Times are wall-clock, in minutes:seconds, for a first run:
 | TITAN X (Pascal) | 0:56 | 1:45 | 10:19 |
 | Apple M5 GPU (MPS) | 1:14 | 2:21 | 14:55 |
 | Apple M5 CPU | 2:30 | 5:00 | 34:18 |
-| 2× Xeon E5-2630 v4 CPU | 4:40 | 8:25 | _pending_ |
+| 2× Xeon E5-2630 v4 CPU | 4:40 | 8:25 | 63:35 |
 | forward passes | ≈ 2,000 | ≈ 4,000 | ≈ 4,800 |
 
 The forward passes follow the formulas above: `n + P`, `2 · (n + P)` and `R · n · P`. `tfidf` has no
