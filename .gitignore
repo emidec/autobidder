@@ -1,0 +1,38 @@
+# CSV files — HotCRP exports (revprefs/users), generated bids, and your topic interests.
+# These hold conference-confidential data and per-round state; keep them local.
+*.csv
+*.csv.bak
+
+# To version-control your topic interests anyway, uncomment:
+# !topic_interests.csv
+
+# Your papers (PDFs) — confidential and large
+*.pdf
+
+# Reviewer expertise profile — confidential, generated per reviewer (timestamped per run)
+reviewer-expertise-profile*.json
+
+# Per-run change summaries — confidential (contain paper titles + bids)
+*.changes.txt
+
+# SPECTER2 embedding cache (generated; regenerates from your papers/submissions)
+.specter2_cache.npz
+.scincl_cache.npz
+
+# Backups and Python cruft
+*.bak
+__pycache__/
+.venv/
+*.pyc
+.DS_Store
+
+# tooling cache
+.claude/
+
+# local run wrapper
+run.sh
+
+# benchmark results (run.sh / accuracy.py) - bids by paper id, hardware, timings; keep local
+bench-*/
+benchmarks/
+*.zip
