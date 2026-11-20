@@ -20,4 +20,9 @@ if [ -z "${PYTHON:-}" ]; then                    # PYTHON=... to pick the interp
     [ -x .venv/bin/python ] && PYTHON=.venv/bin/python
 fi
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
+if [ "$METHOD" = tfidf ]; then
+    echo "Device: cpu (tfidf has no model)" >&2
+else                                             # same choice score_bids.py will make
+    "$PYTHON" -c 'import sys, score_bids as s; print("Device: " + s.device_label(s.resolve_device(sys.argv[1])), file=sys.stderr)' "$DEVICE"
+fi
 exec "$PYTHON" score_bids.py "$INPUT" --method "$METHOD" --device "$DEVICE" "${@:4}"
