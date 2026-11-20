@@ -496,7 +496,11 @@ Measured on a real round of ~2,000 submissions × 12 papers, at the default `--p
 (so `R = 0.2`). Every machine used the same inputs. Each run timed one method on one device, so no
 two runs shared the hardware.
 
-Times are wall-clock, in minutes:seconds, for a first run:
+Times are wall-clock, in minutes:seconds, for a **first run**, with no embedding cache yet. After
+that, `specter2` and `specter2+scincl` load the cached embeddings from `.specter2_cache.npz` and
+`.scincl_cache.npz` and only embed new submissions, so re-running on the same round takes seconds.
+To time a first run again, delete those two files. `rerank` caches nothing, so every run takes the
+full time:
 
 | device | `specter2` | `specter2+scincl` | `rerank` |
 |---|--:|--:|--:|
@@ -522,8 +526,7 @@ The machines:
 - **2× Xeon E5-2630 v4:** a Dell PowerEdge R630 server with two Xeon E5-2630 v4 (20 cores / 40 threads, 2016) and
   128 GB, no GPU. torch 2.15, CPU build, 20 threads.
 
-Re-runs of the embedding methods read the cache and finish in seconds. `rerank` has no cache; its time
-scales with the pair count, so fewer papers or a lower `--positive-frac` shorten it in proportion.
+`rerank`'s time scales with the pair count, so fewer papers or a lower `--positive-frac` shorten it in proportion.
 
 The current datacenter card runs `rerank` about 7× faster than the 2016 cards and `specter2` about
 3× faster. The embedding methods gain less because their runs are short, so loading the model and
