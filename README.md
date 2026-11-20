@@ -539,26 +539,9 @@ Embedding on the M5's CPU peaked at 4.5 GB of RAM.
 
 ### Reproducibility
 
-Fully deterministic: the same papers, `topic_interests.csv` and CSV give identical bids.
-
-**Across devices on one machine**, the bids were identical in every measurement above. Every method
-gave the same bid for every one of the ~2,000 submissions on both NVIDIA cards, and on the M5's GPU
-and CPU. A GPU rounds floating-point math differently from a CPU, so scores differ in their last
-digits. Bids are integers set by rank, so a difference only shows if it swaps two submissions that
-are tied to that precision.
-
-**Across machines**, the two NVIDIA machines and the CPU-only Linux server all matched each other
-exactly, for every method. That held despite different GPU generations (Pascal and Blackwell), GPU
-against CPU, and different torch and CUDA versions.
-
-The Mac did not match at first, because it had an older **pypdf** (7.0.1 against 7.1.1). The two
-versions pull slightly different text out of the same PDFs, so the profile changes. That shifted some
-bids by a few points, while the set of positive bids stayed almost the same. With the same
-pypdf version the bids were identical again. To get the same bids on several machines, install the
-same pypdf version on all of them.
-
-If you need a guarantee rather than a measurement, pass `--device cpu` on every machine. The
-embedding caches don't record the device, so a cache built on one device is reused as-is on another.
+Fully deterministic: the same papers, `topic_interests.csv` and CSV give identical bids. In the
+benchmarks above, every GPU and CPU produced the same bids. Use the same `pypdf` version on every
+machine, because different versions extract slightly different text from the PDFs.
 
 ---
 
